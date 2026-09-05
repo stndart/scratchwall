@@ -20,6 +20,7 @@
   } from './lib/repository';
   import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
   import { createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
+  import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
@@ -49,6 +50,7 @@
   let searchWorker: Worker;
   let disconnectSocket: (() => void) | undefined;
   let syncFlight: Promise<void> | undefined;
+  let stickToBottom = true;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
   $: visibleMemos = memos.filter((memo) =>
@@ -63,9 +65,22 @@
     return { id: uuidv7(), kind, entityId, payload, createdAt: new Date().toISOString(), attempts: 0 };
   }
 
-  async function scrollNewest() {
+  async function scrollNewest(smooth = false) {
     await tick();
-    feed?.scrollTo({ top: feed.scrollHeight });
+    stickToBottom = true;
+    feed?.scrollTo({ top: feed.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  function onFeedScroll() {
+    if (feed) stickToBottom = isNearBottom(feed);
+  }
+
+  async function showMore() {
+    const previousHeight = feed?.scrollHeight ?? 0;
+    const prepend = !query.trim();
+    renderLimit += 200;
+    await tick();
+    if (feed && prepend) feed.scrollTop += prependScrollDelta(previousHeight, feed.scrollHeight);
   }
 
   function openSpace(id: string) {
@@ -77,6 +92,7 @@
   }
 
   async function refresh(scroll = false) {
+    const anchor = !scroll && !stickToBottom && feed ? captureAnchor(feed) : undefined;
     const snapshot = await getSnapshot();
     spaces = snapshot.spaces;
     memos = snapshot.memos;
@@ -86,10 +102,9 @@
     }
     searchWorker?.postMessage({ type: 'update', spaces, memos, attachments: attachments.map(({ id, memoId, filename }) => ({ id, memoId, filename })) });
     if (query) searchWorker?.postMessage({ type: 'query', query });
-    if (scroll) {
-      await tick();
-      feed?.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
-    }
+    await tick();
+    if (scroll || stickToBottom) await scrollNewest(scroll);
+    else if (anchor && feed) restoreAnchor(feed, anchor);
   }
 
   async function sync() {
@@ -448,7 +463,7 @@
       {/if}
       {#if error}<button class="error-banner" onclick={() => error = ''}>{error}<span>×</span></button>{/if}
 
-      <div class="feed" bind:this={feed}>
+      <div class="feed" bind:this={feed} onscroll={onFeedScroll}>
         {#if visibleMemos.length === 0}
           <div class="empty">
             <div>{query ? '⌕' : '✦'}</div>
@@ -457,12 +472,12 @@
           </div>
         {/if}
         {#if visibleMemos.length > renderedMemos.length}
-          <button class="load-more" onclick={() => renderLimit += 200}>
+          <button class="load-more" onclick={() => showMore()}>
             {query ? `Show more results (${visibleMemos.length - renderedMemos.length} remaining)` : 'Show 200 older memos'}
           </button>
         {/if}
         {#each renderedMemos as memo (memo.id)}
-          <article class="memo" class:pending={memo.syncState === 'pending'} class:error={memo.syncState === 'error'}>
+          <article data-memo-id={memo.id} class="memo" class:pending={memo.syncState === 'pending'} class:error={memo.syncState === 'error'}>
             {#if memo.body}<p>{#each linkParts(memo.body) as part}{#if part.href}<a href={part.href} target="_blank" rel="noreferrer">{part.value}</a>{:else}{part.value}{/if}{/each}</p>{/if}
             {#if memo.tags.length}
               <div class="tags">{#each memo.tags as tag}<button onclick={() => query = tag}>#{tag}</button>{/each}</div>
