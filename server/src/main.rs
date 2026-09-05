@@ -11,12 +11,12 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        Extension, State, WebSocketUpgrade,
+        Extension, Path, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::{HeaderName, HeaderValue, Method, Request, StatusCode, header},
     middleware,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, patch, post},
 };
 use config::Config;
@@ -89,6 +89,125 @@ async fn manifest(
         appimage: format!("{base}/downloads/Scratchwall_0.1.0_amd64.AppImage"),
         linux: format!("{base}/downloads/scratchwall"),
     })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn downloads_catalog_html(base: &str, include_checksums: bool) -> String {
+    let base = escape_html(base.trim_end_matches('/'));
+    let version = escape_html(env!("CARGO_PKG_VERSION"));
+    let artifacts = [
+        (
+            "Android",
+            "Universal APK",
+            format!("{base}/downloads/Scratchwall-universal-release.apk"),
+        ),
+        (
+            "Windows",
+            "Installer",
+            format!("{base}/downloads/Scratchwall_0.1.0_x64-setup.exe"),
+        ),
+        (
+            "Windows",
+            "Portable EXE",
+            format!("{base}/downloads/scratchwall.exe"),
+        ),
+        (
+            "Linux",
+            "AppImage",
+            format!("{base}/downloads/Scratchwall_0.1.0_amd64.AppImage"),
+        ),
+        (
+            "Linux",
+            "ELF binary",
+            format!("{base}/downloads/scratchwall"),
+        ),
+    ];
+    let mut items = String::new();
+    for (platform, label, href) in artifacts {
+        let name = href.rsplit('/').next().unwrap_or(href.as_str());
+        items.push_str(&format!(
+            "<li><a href=\"{href}\"><strong>{platform}</strong><span>{label}</span><small>{name}</small></a></li>"
+        ));
+    }
+    if include_checksums {
+        items.push_str(&format!(
+            "<li><a href=\"{base}/downloads/SHA256SUMS.txt\"><strong>Checksums</strong><span>SHA-256</span><small>SHA256SUMS.txt</small></a></li>"
+        ));
+    }
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><title>Scratchwall downloads</title><style>
+:root {{ font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #eef0f7; background: #0d0f14; }}
+body {{ max-width: 560px; margin: 0 auto; padding: 48px 20px; }}
+a.back {{ color: #9f94ff; text-decoration: none; font-size: 14px; }}
+h1 {{ margin: 18px 0 8px; font-size: 28px; }}
+p {{ color: #969dac; line-height: 1.5; }}
+ul {{ list-style: none; padding: 0; margin: 28px 0; }}
+li {{ margin: 0 0 10px; }}
+li a {{ display: grid; gap: 2px; padding: 14px 16px; border: 1px solid #2a2f3d; border-radius: 14px; background: #14171f; color: inherit; text-decoration: none; }}
+li a:hover {{ border-color: #7c6cff; }}
+strong {{ font-size: 13px; color: #9f94ff; letter-spacing: .04em; text-transform: uppercase; }}
+span {{ font-size: 16px; }}
+small {{ color: #969dac; }}
+</style></head><body>
+<a class=\"back\" href=\"/\">Scratchwall</a>
+<h1>Downloads</h1>
+<p>Install Scratchwall {version} on this device, or grab a build for another platform. The web app itself is at the home page.</p>
+<ul>{items}</ul>
+</body></html>"
+    )
+}
+
+async fn downloads_page(State(state): State<AppState>) -> Html<String> {
+    let checksums = state
+        .config
+        .data_dir
+        .join("downloads")
+        .join("SHA256SUMS.txt")
+        .is_file();
+    Html(downloads_catalog_html(
+        &state.config.public_base_url,
+        checksums,
+    ))
+}
+
+async fn download_artifact(Path(name): Path<String>, State(state): State<AppState>) -> Response {
+    let requested = std::path::Path::new(&name);
+    if requested
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let path = state.config.data_dir.join("downloads").join(requested);
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mime = mime_guess::from_path(&path).first_or_octet_stream();
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(mime.essence_str())
+                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+                .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+        ),
+    ];
+    (
+        headers,
+        Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response()
 }
 
 async fn security_headers(request: Request<Body>, next: middleware::Next) -> Response {
@@ -179,7 +298,6 @@ async fn main() -> anyhow::Result<()> {
             auth::require_auth,
         ));
 
-    let downloads = ServeDir::new(config.data_dir.join("downloads"));
     tokio::fs::create_dir_all(config.data_dir.join("downloads")).await?;
     let static_files = ServeDir::new(&config.web_dir)
         .not_found_service(ServeFile::new(config.web_dir.join("index.html")));
@@ -214,7 +332,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/auth/native/exchange", post(auth::exchange))
         .route("/auth/oidc/callback", get(auth::callback))
         .route("/downloads/manifest.json", get(manifest))
-        .nest_service("/downloads", downloads)
+        .route("/downloads", get(downloads_page))
+        .route("/downloads/", get(downloads_page))
+        .route("/downloads/{name}", get(download_artifact))
         .nest("/api/v1", protected)
         .fallback_service(static_files)
         .layer(cors)
@@ -227,4 +347,107 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(address = %config.listen_addr, "Scratchwall listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use std::sync::Arc;
+
+    #[test]
+    fn downloads_page_lists_release_artifacts() {
+        let html = downloads_catalog_html("https://scratch.test", true);
+        let response = Html(html.clone()).into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        for name in [
+            "Scratchwall-universal-release.apk",
+            "Scratchwall_0.1.0_x64-setup.exe",
+            "scratchwall.exe",
+            "Scratchwall_0.1.0_amd64.AppImage",
+            "/downloads/scratchwall",
+            "SHA256SUMS.txt",
+        ] {
+            assert!(html.contains(name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn downloads_page_omits_checksums_when_absent() {
+        let html = downloads_catalog_html("https://scratch.test", false);
+        assert!(!html.contains("SHA256SUMS.txt"));
+    }
+
+    #[tokio::test]
+    async fn downloads_http_serves_catalog_and_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let downloads_dir = directory.path().join("downloads");
+        std::fs::create_dir_all(&downloads_dir).unwrap();
+        std::fs::write(downloads_dir.join("SHA256SUMS.txt"), "abc").unwrap();
+        let db = crate::db::connect(directory.path()).await.unwrap();
+        let config = Arc::new(crate::config::Config {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: directory.path().into(),
+            web_dir: ".".into(),
+            public_base_url: "https://scratch.test".into(),
+            oidc_issuer: "https://issuer.test".into(),
+            oidc_client_id: "test".into(),
+            oidc_client_secret: "test".into(),
+            oidc_groups_claim: "groups".into(),
+            allowed_groups: Arc::new(vec!["admins".into()]),
+            session_key: [1; 32],
+            max_attachment_bytes: 2_147_483_648,
+        });
+        let (changes, _) = tokio::sync::broadcast::channel(8);
+        let state = AppState {
+            config: config.clone(),
+            db,
+            http: reqwest::Client::new(),
+            changes,
+        };
+        let app = Router::new()
+            .route("/downloads/manifest.json", get(manifest))
+            .route("/downloads", get(downloads_page))
+            .route("/downloads/", get(downloads_page))
+            .route("/downloads/{name}", get(download_artifact))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for path in ["/downloads/", "/downloads"] {
+            let catalog = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(catalog.status(), StatusCode::OK, "{path}");
+            let body = catalog.text().await.unwrap();
+            assert!(body.contains("Scratchwall-universal-release.apk"), "{path}");
+            assert!(body.contains("SHA256SUMS.txt"), "{path}");
+        }
+        let sums = client
+            .get(format!("http://{addr}/downloads/SHA256SUMS.txt"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sums.status(), StatusCode::OK);
+        assert_eq!(sums.text().await.unwrap(), "abc");
+        let manifest = client
+            .get(format!("http://{addr}/downloads/manifest.json"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(manifest.status(), StatusCode::OK);
+        let payload: serde_json::Value = manifest.json().await.unwrap();
+        assert_eq!(
+            payload["android"],
+            "https://scratch.test/downloads/Scratchwall-universal-release.apk"
+        );
+    }
 }

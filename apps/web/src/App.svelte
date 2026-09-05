@@ -382,7 +382,7 @@
       try {
         const manifest = await fetch(`${apiOrigin()}/downloads/manifest.json`).then((response) => response.ok ? response.json() : undefined);
         if (manifest?.version && manifest.version.localeCompare('0.1.0', undefined, { numeric: true }) > 0) {
-          updateAvailable = { version: manifest.version, url: manifest.web ?? '/downloads/' };
+          updateAvailable = { version: manifest.version, url: `${apiOrigin()}/downloads/` };
         }
       } catch { /* launch checks are best effort */ }
     })();
@@ -412,6 +412,7 @@
     <h1>Scratchwall</h1>
     <p>Your quiet, fast place for links, files, and short notes.</p>
     <button class="primary" onclick={login} disabled={!online}>Continue with VoidAuth</button>
+    <a class="gate-download" href={`${apiOrigin()}/downloads/`}>Download apps</a>
     {#if !online}<small>Connect once to sign in on this device.</small>{/if}
   </main>
 {:else}
@@ -439,6 +440,7 @@
         <span title={reachable ? 'Online' : 'Offline'} class:online={reachable} class="status-dot"></span>
         <span>{syncing ? 'Syncing…' : reachable ? 'Synced locally' : 'Offline — saved locally'}</span>
         <button class="link-button" onclick={() => sync()}>Sync</button>
+        <a class="link-button" href={`${apiOrigin()}/downloads/`}>Downloads</a>
         <button class="link-button" onclick={clearFiles}>Clear files</button>
         <button class="link-button" onclick={signOut}>Log out</button>
       </div>
