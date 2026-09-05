@@ -437,12 +437,16 @@
       </nav>
       <button class="new-space" onclick={addSpace}>＋ New space</button>
       <div class="sidebar-foot">
-        <span title={reachable ? 'Online' : 'Offline'} class:online={reachable} class="status-dot"></span>
-        <span>{syncing ? 'Syncing…' : reachable ? 'Synced locally' : 'Offline — saved locally'}</span>
-        <button class="link-button" onclick={() => sync()}>Sync</button>
-        <a class="link-button" href={`${apiOrigin()}/downloads/`}>Downloads</a>
-        <button class="link-button" onclick={clearFiles}>Clear files</button>
-        <button class="link-button" onclick={signOut}>Log out</button>
+        <div class="sidebar-status">
+          <span title={reachable ? 'Online' : 'Offline'} class:online={reachable} class="status-dot"></span>
+          <span>{syncing ? 'Syncing…' : reachable ? 'Synced locally' : 'Offline — saved locally'}</span>
+        </div>
+        <div class="sidebar-actions">
+          <button class="link-button" onclick={() => sync()}>Sync</button>
+          <a class="link-button" href={`${apiOrigin()}/downloads/`}>Downloads</a>
+          <button class="link-button" onclick={clearFiles}>Clear files</button>
+          <button class="link-button" onclick={signOut}>Log out</button>
+        </div>
       </div>
     </aside>
 

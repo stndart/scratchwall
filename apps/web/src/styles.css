@@ -33,10 +33,12 @@ nav { flex: 1; padding: 8px; overflow: auto; }
 .danger { color: var(--danger) !important; }
 .new-space { margin: 8px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
 .new-space:hover { color: white; border-color: var(--accent); }
-.sidebar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #59606e; }.status-dot.online { background: #45d69a; }
-.sidebar-foot > span:nth-of-type(2) { flex: 1; min-width: 0; }
-.link-button { padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: none; }
+.sidebar-foot { display: flex; flex-shrink: 0; flex-direction: column; gap: 8px; padding: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.sidebar-status { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.sidebar-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: #59606e; }.status-dot.online { background: #45d69a; }
+.sidebar-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; }
+.link-button { flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: none; white-space: nowrap; }
 
 .workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; height: 100%; }
 header { display: flex; flex-shrink: 0; align-items: center; gap: 18px; min-height: 72px; padding: 11px 22px; border-bottom: 1px solid var(--line); background: #0d0f14bb; backdrop-filter: blur(18px); z-index: 2; }
