@@ -487,8 +487,8 @@
             {#if memo.attachmentIds.length}
               <div class="attachments">
                 {#each attachmentsFor(memo) as attachment (attachment.id)}
-                  <button class:image={Boolean(attachment.thumbnail || attachment.mimeType.startsWith('image/'))} class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
-                    {#if attachment.thumbnail}
+                  <button class:image={attachment.mimeType.startsWith('image/') && Boolean(attachment.thumbnail)} class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
+                    {#if attachment.mimeType.startsWith('image/') && attachment.thumbnail}
                       <span class="file-preview"><img src={attachment.thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
                     {:else}
                       <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span><span class="dl-mark" aria-hidden="true">↓</span></span>

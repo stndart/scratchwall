@@ -210,9 +210,16 @@ async fn download_artifact(Path(name): Path<String>, State(state): State<AppStat
         .into_response()
 }
 
+fn is_spa_shell(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/index.html" | "/sw.js" | "/registerSW.js" | "/manifest.webmanifest"
+    )
+}
+
 async fn security_headers(request: Request<Body>, next: middleware::Next) -> Response {
-    let sensitive =
-        request.uri().path().starts_with("/api/") || request.uri().path().starts_with("/auth/");
+    let path = request.uri().path().to_string();
+    let sensitive = path.starts_with("/api/") || path.starts_with("/auth/");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -225,6 +232,9 @@ async fn security_headers(request: Request<Body>, next: middleware::Next) -> Res
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     } else {
         headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; connect-src 'self' https://scratch.morad.uk wss://scratch.morad.uk; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
+        if is_spa_shell(&path) {
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        }
     }
     response
 }
@@ -376,6 +386,50 @@ mod tests {
     fn downloads_page_omits_checksums_when_absent() {
         let html = downloads_catalog_html("https://scratch.test", false);
         assert!(!html.contains("SHA256SUMS.txt"));
+    }
+
+    #[test]
+    fn spa_shell_paths_are_the_uncached_entry_points() {
+        for path in [
+            "/",
+            "/index.html",
+            "/sw.js",
+            "/registerSW.js",
+            "/manifest.webmanifest",
+        ] {
+            assert!(is_spa_shell(path), "{path}");
+        }
+        assert!(!is_spa_shell("/assets/index-abc.js"));
+        assert!(!is_spa_shell("/api/v1/sync"));
+    }
+
+    #[tokio::test]
+    async fn spa_shell_sends_no_cache() {
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        let app = Router::new()
+            .route("/", get(ok))
+            .route("/assets/app.js", get(ok))
+            .layer(middleware::from_fn(security_headers));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        let shell = client.get(format!("http://{addr}/")).send().await.unwrap();
+        assert_eq!(shell.status(), StatusCode::OK);
+        assert_eq!(
+            shell.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache"
+        );
+        let asset = client
+            .get(format!("http://{addr}/assets/app.js"))
+            .send()
+            .await
+            .unwrap();
+        assert!(asset.headers().get(header::CACHE_CONTROL).is_none());
     }
 
     #[tokio::test]

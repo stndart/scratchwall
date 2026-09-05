@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       manifest: {
         name: 'Scratchwall',
         short_name: 'Scratchwall',
@@ -23,7 +23,9 @@ export default defineConfig({
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//, /^\/auth\//, /^\/downloads\//, /^\/healthz$/],
         runtimeCaching: [],
-        cleanupOutdatedCaches: true
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true
       }
     })
   ],
