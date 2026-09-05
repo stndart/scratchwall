@@ -55,7 +55,7 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tags button, .tag-row button { padding: 3px 8px; border: 0; border-radius: 999px; background: #282441; color: var(--accent-2); font-size: 12px; cursor: pointer; }
 .attachments { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
-.attachment { display: flex; align-items: center; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: #11141b; text-align: left; cursor: pointer; }
+.attachment { display: flex; align-items: center; min-width: 0; min-height: 44px; padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: #11141b; text-align: left; cursor: pointer; }
 .attachment.image { display: block; padding: 0; overflow: hidden; }.attachment.image img { width: 100%; max-height: 260px; display: block; object-fit: cover; }
 .file-icon { margin: 0 10px; font-size: 22px; }.file-meta { min-width: 0; }.file-meta strong, .file-meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.file-meta small { color: var(--muted); }
 .empty { display: grid; place-items: center; max-width: 440px; margin: 15vh auto; color: var(--muted); text-align: center; }.empty > div { font-size: 36px; color: var(--accent); }.empty h2 { margin-bottom: 0; color: white; }
@@ -82,6 +82,7 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
   header h1 { font-size: 16px; }
   .search { width: 46vw; }
   .feed { padding: 16px 10px; }
+  .attachments { grid-template-columns: 1fr; }
   .composer { width: calc(100% - 16px); margin-bottom: max(8px, env(safe-area-inset-bottom)); }
   .memo { border-radius: 14px 14px 14px 4px; }
 }

@@ -211,8 +211,31 @@
     void sync();
   }
 
-  function attachmentsFor(memo: Memo) {
-    return attachments.filter((attachment) => memo.attachmentIds.includes(attachment.id));
+  function attachmentsFor(memo: Memo): Attachment[] {
+    const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+    return memo.attachmentIds.map((id) => byId.get(id) ?? {
+      id,
+      memoId: memo.id,
+      filename: 'Syncing…',
+      mimeType: 'application/octet-stream',
+      size: 0,
+      remoteReady: false,
+      cacheState: 'remote',
+      createdAt: memo.createdAt
+    });
+  }
+
+  function downloadBlob(blob: Blob, filename: string, preview = false) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.rel = 'noopener';
+    if (preview) link.target = '_blank';
+    else link.download = filename || 'download';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
   async function openAttachment(attachment: Attachment) {
@@ -236,7 +259,7 @@
         return;
       }
     }
-    window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+    downloadBlob(blob, attachment.filename, attachment.mimeType.startsWith('image/'));
   }
 
   function linkParts(text: string): Array<{ value: string; href?: string }> {
@@ -444,12 +467,12 @@
             {#if memo.tags.length}
               <div class="tags">{#each memo.tags as tag}<button onclick={() => query = tag}>#{tag}</button>{/each}</div>
             {/if}
-            {#if attachmentsFor(memo).length}
+            {#if memo.attachmentIds.length}
               <div class="attachments">
-                {#each attachmentsFor(memo) as attachment}
-                  <button class:image={attachment.mimeType.startsWith('image/')} class="attachment" onclick={() => openAttachment(attachment)}>
+                {#each attachmentsFor(memo) as attachment (attachment.id)}
+                  <button class:image={Boolean(attachment.thumbnail || attachment.mimeType.startsWith('image/'))} class="attachment" onclick={() => openAttachment(attachment)}>
                     {#if attachment.thumbnail}<img src={attachment.thumbnail} alt={attachment.filename} />{:else}<span class="file-icon">↧</span>{/if}
-                    <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.mimeType} · {formatBytes(attachment.size)} · {attachment.cacheState}</small></span>
+                    <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
                   </button>
                 {/each}
               </div>
