@@ -1,0 +1,11 @@
+.git
+.env
+artifacts
+data
+node_modules
+**/node_modules
+**/dist
+**/target
+apps/web/src-tauri/gen
+*.jks
+*.keystore

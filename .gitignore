@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+target/
+data/
+.env
+.secrets/
+*.jks
+*.keystore
+apps/web/src-tauri/gen/schemas/
+apps/web/src-tauri/gen/apple/
+artifacts/

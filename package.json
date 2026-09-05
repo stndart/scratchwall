@@ -1,0 +1,14 @@
+{
+  "name": "scratchwall",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @scratchwall/web dev",
+    "build": "pnpm --filter @scratchwall/web build",
+    "check": "pnpm --filter @scratchwall/web check",
+    "test": "pnpm --filter @scratchwall/web test && cargo test --manifest-path server/Cargo.toml",
+    "server": "cargo run --manifest-path server/Cargo.toml",
+    "tauri": "pnpm --filter @scratchwall/web tauri"
+  }
+}
