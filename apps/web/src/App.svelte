@@ -19,7 +19,7 @@
     setProfile
   } from './lib/repository';
   import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
-  import { createThumbnail, formatBytes } from './lib/media';
+  import { createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
@@ -470,8 +470,12 @@
             {#if memo.attachmentIds.length}
               <div class="attachments">
                 {#each attachmentsFor(memo) as attachment (attachment.id)}
-                  <button class:image={Boolean(attachment.thumbnail || attachment.mimeType.startsWith('image/'))} class="attachment" onclick={() => openAttachment(attachment)}>
-                    {#if attachment.thumbnail}<img src={attachment.thumbnail} alt={attachment.filename} />{:else}<span class="file-icon">↧</span>{/if}
+                  <button class:image={Boolean(attachment.thumbnail || attachment.mimeType.startsWith('image/'))} class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
+                    {#if attachment.thumbnail}
+                      <span class="file-preview"><img src={attachment.thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                    {:else}
+                      <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span><span class="dl-mark" aria-hidden="true">↓</span></span>
+                    {/if}
                     <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
                   </button>
                 {/each}

@@ -56,8 +56,20 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .tags button, .tag-row button { padding: 3px 8px; border: 0; border-radius: 999px; background: #282441; color: var(--accent-2); font-size: 12px; cursor: pointer; }
 .attachments { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
 .attachment { display: flex; align-items: center; min-width: 0; min-height: 44px; padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: #11141b; text-align: left; cursor: pointer; }
-.attachment.image { display: block; padding: 0; overflow: hidden; }.attachment.image img { width: 100%; max-height: 260px; display: block; object-fit: cover; }
-.file-icon { margin: 0 10px; font-size: 22px; }.file-meta { min-width: 0; }.file-meta strong, .file-meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.file-meta small { color: var(--muted); }
+.attachment.image { display: block; padding: 0; overflow: hidden; }
+.attachment.image .file-preview { display: block; position: relative; }
+.attachment.image .file-preview img { width: 100%; max-height: 260px; display: block; object-fit: cover; }
+.file-badge { position: relative; display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; margin-right: 10px; border-radius: 10px; background: #3a4154; color: #e8ebf5; font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.file-badge .ext { line-height: 1; }
+.dl-mark { position: absolute; inset: 0; display: grid; place-items: center; border-radius: inherit; background: #0d0f14b8; color: white; font-size: 18px; opacity: 0; pointer-events: none; }
+.attachment.remote .file-badge { opacity: .55; }
+@media (hover: hover) {
+  .attachment:hover .dl-mark { opacity: 1; }
+}
+@media (hover: none) {
+  .attachment.remote .dl-mark { opacity: 1; }
+}
+.file-meta { min-width: 0; }.file-meta strong, .file-meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.file-meta small { color: var(--muted); }
 .empty { display: grid; place-items: center; max-width: 440px; margin: 15vh auto; color: var(--muted); text-align: center; }.empty > div { font-size: 36px; color: var(--accent); }.empty h2 { margin-bottom: 0; color: white; }
 
 .composer { width: min(800px, calc(100% - 36px)); margin: 0 auto max(18px, env(safe-area-inset-bottom)); padding: 9px; border: 1px solid var(--line); border-radius: 17px; background: #171a22ee; box-shadow: 0 15px 50px #0008; backdrop-filter: blur(18px); }
@@ -91,5 +103,5 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
   :root { color: #20232d; background: #f4f5f9; --panel: #fff; --panel-2: #ebeaf5; --line: #dfe1e9; --muted: #687080; }
   .shell { background: radial-gradient(circle at 70% 0%, #eeebff, #f5f6f9 38%); }
   aside, header { background: #f7f7fbdc; }.search, .composer { background: #fffefeee; }.search input, .compose-row textarea, .tag-row input { color: #20232d; }
-  .attachment { background: #f7f7fa; }.empty h2 { color: #20232d; }.gate { background: radial-gradient(circle at 50% 20%, #e3deff, #f5f6f9 45%); }
+  .attachment { background: #f7f7fa; }.file-badge { background: #5c6478; color: #fff; }.empty h2 { color: #20232d; }.gate { background: radial-gradient(circle at 50% 20%, #e3deff, #f5f6f9 45%); }
 }

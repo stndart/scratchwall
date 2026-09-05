@@ -24,3 +24,15 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
 }
 
+export function fileExtension(filename: string): string {
+  const base = filename.trim().split(/[/\\]/).pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return 'FILE';
+  const ext = base.slice(dot + 1).replace(/[^A-Za-z0-9]/g, '');
+  return ext ? ext.slice(0, 5).toUpperCase() : 'FILE';
+}
+
+export function isAttachmentCached(cacheState: 'local' | 'cached' | 'remote' | 'error'): boolean {
+  return cacheState === 'local' || cacheState === 'cached';
+}
+
