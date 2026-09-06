@@ -18,13 +18,21 @@ async function challenge(verifier: string): Promise<string> {
   return base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
 }
 
+export function nativeCallbackCode(url: string): string | undefined {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return; }
+  if (parsed.protocol !== 'scratchwall:') return;
+  const route = `${parsed.hostname}${parsed.pathname}`.replace(/\/{2,}/g, '/').replace(/^\/+|\/+$/g, '');
+  if (route !== 'auth/callback') return;
+  return parsed.searchParams.get('code') ?? undefined;
+}
+
 async function acceptUrl(url: string): Promise<Profile | undefined> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== 'scratchwall:' || parsed.hostname !== 'auth' || parsed.pathname !== '/callback') return;
-  const code = parsed.searchParams.get('code');
+  const code = nativeCallbackCode(url);
+  if (!code) return;
   const pending = JSON.parse(localStorage.getItem(VERIFIER_KEY) ?? 'null') as { verifier: string; expiresAt: number } | null;
   const verifier = pending && pending.expiresAt > Date.now() ? pending.verifier : undefined;
-  if (!code || !verifier) return;
+  if (!verifier) throw new Error('Sign-in expired. Press Continue with VoidAuth again.');
   const response = await fetch('https://scratch.morad.uk/api/v1/auth/native/exchange', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code, codeVerifier: verifier })
@@ -37,20 +45,25 @@ async function acceptUrl(url: string): Promise<Profile | undefined> {
   return result.profile as Profile;
 }
 
-export async function initializeNativeAuth(onAuthenticated: (profile: Profile) => void | Promise<void>): Promise<() => void> {
+export async function initializeNativeAuth(
+  onAuthenticated: (profile: Profile) => void | Promise<void>,
+  onError?: (error: unknown) => void
+): Promise<() => void> {
   if (!isNative()) return () => {};
   const { getCurrent, onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
-  const current = await getCurrent();
-  for (const url of current ?? []) {
-    const profile = await acceptUrl(url);
-    if (profile) await onAuthenticated(profile);
-  }
-  return onOpenUrl(async (urls) => {
+  const handle = async (urls: string[]) => {
     for (const url of urls) {
-      const profile = await acceptUrl(url);
-      if (profile) await onAuthenticated(profile);
+      try {
+        const profile = await acceptUrl(url);
+        if (profile) await onAuthenticated(profile);
+      } catch (error) {
+        onError?.(error);
+      }
     }
-  });
+  };
+  const current = await getCurrent();
+  await handle(current ?? []);
+  return onOpenUrl(handle);
 }
 
 export async function startNativeLogin(): Promise<void> {

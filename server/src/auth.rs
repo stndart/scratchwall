@@ -7,7 +7,7 @@ use axum::{
     Json,
     body::Body,
     extract::{Extension, Query, State},
-    http::{Request, header},
+    http::{HeaderMap, Request, StatusCode, header},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -286,9 +286,53 @@ pub async fn login(
     Ok(response)
 }
 
+fn native_app_url(code: &str) -> String {
+    format!("scratchwall://auth/callback?code={code}")
+}
+
+fn native_intent_url(code: &str) -> String {
+    format!(
+        "intent://auth/callback?code={code}#Intent;scheme=scratchwall;package=uk.morad.scratchwall;end"
+    )
+}
+
+fn native_return_html(code: &str) -> String {
+    let app = native_app_url(code);
+    let intent = native_intent_url(code);
+    format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open Scratchwall</title></head><body style="font-family:system-ui;background:#101218;color:#eef0f7;display:grid;place-items:center;min-height:100vh;margin:0"><main style="text-align:center;padding:24px;max-width:28rem"><p>Sign-in complete. Opening Scratchwall…</p><p><a id="open" href="{app}" style="display:inline-block;margin-top:12px;padding:12px 20px;border-radius:12px;background:#7c6cff;color:#fff;text-decoration:none;font-weight:600">Open Scratchwall</a></p><p><a href="{intent}" style="color:#9f94ff">Open on Android</a></p></main><iframe src="{app}" style="display:none" title=""></iframe><script>(function(){{var app={app:?};var intent={intent:?};location.replace(app);setTimeout(function(){{location.replace(intent)}},250);}})();</script></body></html>"#
+    )
+}
+
+fn is_android_user_agent(user_agent: Option<&str>) -> bool {
+    user_agent.is_some_and(|value| value.to_ascii_lowercase().contains("android"))
+}
+
+fn native_return_response(code: &str, user_agent: Option<&str>) -> Response {
+    let html = native_return_html(code);
+    if is_android_user_agent(user_agent) {
+        let mut response = Html(html).into_response();
+        *response.status_mut() = StatusCode::FOUND;
+        if let Ok(location) = native_app_url(code).parse() {
+            response.headers_mut().insert(header::LOCATION, location);
+        }
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        response
+    } else {
+        let mut response = Html(html).into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        response
+    }
+}
+
 pub async fn callback(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, AppError> {
     if jar.get("scratchwall_login").map(Cookie::value) != Some(query.state.as_str()) {
@@ -417,11 +461,13 @@ pub async fn callback(
         .bind(token_hash(&code))
         .bind(user_id)
         .bind(native_challenge.ok_or(AppError::Forbidden)?)
-        .bind(Utc::now().timestamp() + 60)
+        .bind(Utc::now().timestamp() + 600)
         .execute(&state.db)
         .await?;
-        let target = format!("scratchwall://auth/callback?code={code}");
-        return Ok(Html(format!(r#"<!doctype html><meta name="viewport" content="width=device-width"><title>Scratchwall</title><body style="font-family:system-ui;background:#101218;color:#fff;display:grid;place-items:center;height:100vh"><p>Returning to Scratchwall…</p><script>location.replace({target:?})</script></body>"#)).into_response());
+        let user_agent = headers
+            .get(header::USER_AGENT)
+            .and_then(|value| value.to_str().ok());
+        return Ok(native_return_response(&code, user_agent));
     }
 
     let (session, expires_at) = create_session(&state, user_id).await?;
@@ -595,6 +641,37 @@ mod tests {
             pkce_challenge("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"),
             "ImpiCd8pp4MveCNnbIS7-GXEtB0xF5HMIDoWqvGA5ig"
         );
+    }
+
+    #[test]
+    fn native_return_page_can_be_opened_manually() {
+        let html = native_return_html("abc_CODE-123");
+        assert!(html.contains(r#"href="scratchwall://auth/callback?code=abc_CODE-123""#));
+        assert!(html.contains("package=uk.morad.scratchwall"));
+        assert!(html.contains("Open Scratchwall"));
+        assert!(html.contains("<iframe"));
+    }
+
+    #[test]
+    fn android_native_return_redirects_to_the_app_scheme() {
+        let response = native_return_response(
+            "abc",
+            Some("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.0.0"),
+        );
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "scratchwall://auth/callback?code=abc"
+        );
+    }
+
+    #[test]
+    fn desktop_native_return_keeps_the_open_link_visible() {
+        let response = native_return_response(
+            "abc",
+            Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"),
+        );
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

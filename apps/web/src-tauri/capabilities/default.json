@@ -3,8 +3,9 @@
   "identifier": "default",
   "description": "Scratchwall local-first application permissions",
   "windows": ["main"],
-  "permissions": [
+    "permissions": [
     "core:default",
+    "core:event:default",
     "deep-link:default",
     "fs:default",
     "fs:allow-app-read-recursive",

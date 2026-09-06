@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)
                 .add_migrations("sqlite:scratchwall.sqlite", migrations)
                 .build(),
         )
+        .setup(|app| {
+            // Portable EXE/AppImage builds are not installed, so the OS will not
+            // associate scratchwall:// unless the running binary registers it.
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running Scratchwall");
 }

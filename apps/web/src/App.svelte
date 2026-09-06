@@ -320,6 +320,12 @@
     selectedFiles = [...selectedFiles, ...files];
   }
 
+  async function signIn() {
+    error = '';
+    try { await login(); }
+    catch (value) { error = value instanceof Error ? value.message : String(value); }
+  }
+
   async function signOut() {
     if (!confirm('Log out and wipe every locally cached memo and file from this device?')) return;
     profile = undefined;
@@ -356,11 +362,14 @@
     let removeDeepLink = () => {};
     void (async () => {
       removeDeepLink = await initializeNativeAuth(async (authenticated) => {
+        error = '';
         const previous = await getProfile();
         if (previous && previous.subject !== authenticated.subject) await clearLocalData();
         profile = authenticated;
         await setProfile(authenticated);
         await sync();
+      }, (value) => {
+        error = value instanceof Error ? value.message : String(value);
       });
       await refresh();
       profile = await getProfile();
@@ -411,8 +420,9 @@
     <div class="brand-mark">S</div>
     <h1>Scratchwall</h1>
     <p>Your quiet, fast place for links, files, and short notes.</p>
-    <button class="primary" onclick={login} disabled={!online}>Continue with VoidAuth</button>
+    <button class="primary" onclick={signIn} disabled={!online}>Continue with VoidAuth</button>
     <a class="gate-download" href={`${apiOrigin()}/downloads/`}>Download apps</a>
+    {#if error}<p class="gate-error">{error}</p>{/if}
     {#if !online}<small>Connect once to sign in on this device.</small>{/if}
   </main>
 {:else}
