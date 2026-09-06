@@ -22,6 +22,7 @@
   import { createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
+  import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -47,6 +48,8 @@
   let updateAvailable: { version: string; url: string } | undefined;
   let feed: HTMLDivElement;
   let fileInput: HTMLInputElement;
+  let dragDepth = 0;
+  let draggingFiles = false;
   let searchWorker: Worker;
   let disconnectSocket: (() => void) | undefined;
   let syncFlight: Promise<void> | undefined;
@@ -240,6 +243,10 @@
     });
   }
 
+  function isAlbumImage(attachment: Attachment) {
+    return attachment.mimeType.startsWith('image/') && Boolean(attachment.thumbnail);
+  }
+
   function downloadBlob(blob: Blob, filename: string, preview = false) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -308,16 +315,49 @@
     if (fileList) selectedFiles = [...selectedFiles, ...Array.from(fileList)];
   }
 
+  function hasDragFiles(event: DragEvent) {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  }
+
+  function handleDragEnter(event: DragEvent) {
+    if (!hasDragFiles(event) && !draggingFiles) return;
+    event.preventDefault();
+    dragDepth += 1;
+    draggingFiles = true;
+  }
+
+  function handleDragLeave() {
+    if (!draggingFiles) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) draggingFiles = false;
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!hasDragFiles(event) && !draggingFiles) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  }
+
   function handleDrop(event: DragEvent) {
     event.preventDefault();
+    dragDepth = 0;
+    draggingFiles = false;
     handleFiles(event.dataTransfer?.files ?? null);
   }
 
   function handlePaste(event: ClipboardEvent) {
-    const files = Array.from(event.clipboardData?.files ?? []);
-    if (!files.length) return;
+    if (!profile) return;
+    const files = filesFromClipboard(event.clipboardData);
+    if (files.length) {
+      event.preventDefault();
+      selectedFiles = [...selectedFiles, ...files];
+      return;
+    }
+    if (isTypingTarget(event.target) || query) return;
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    if (!text) return;
     event.preventDefault();
-    selectedFiles = [...selectedFiles, ...files];
+    body = body ? `${body}${text}` : text;
   }
 
   async function signIn() {
@@ -353,6 +393,7 @@
     window.addEventListener('offline', onOffline);
     const onVisibility = () => { if (document.visibilityState === 'visible') void sync(); };
     document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener('paste', handlePaste);
     // Native clients cannot attach their bearer token to a browser WebSocket.
     // A visible-only timer keeps all open clients inside the two-second convergence target.
     const foregroundSync = window.setInterval(() => {
@@ -402,6 +443,7 @@
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
       document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener('paste', handlePaste);
       window.clearInterval(foregroundSync);
       removeDeepLink();
     };
@@ -426,7 +468,7 @@
     {#if !online}<small>Connect once to sign in on this device.</small>{/if}
   </main>
 {:else}
-  <div class="shell" role="application" ondragover={(event) => event.preventDefault()} ondrop={handleDrop}>
+  <div class="shell" role="application" ondragenter={handleDragEnter} ondragleave={handleDragLeave} ondragover={handleDragOver} ondrop={handleDrop}>
     <aside class:open={sidebarOpen}>
       <div class="sidebar-head">
         <div class="wordmark"><span>S</span> Scratchwall</div>
@@ -499,18 +541,39 @@
               <div class="tags">{#each memo.tags as tag}<button onclick={() => query = tag}>#{tag}</button>{/each}</div>
             {/if}
             {#if memo.attachmentIds.length}
-              <div class="attachments">
-                {#each attachmentsFor(memo) as attachment (attachment.id)}
-                  <button class:image={attachment.mimeType.startsWith('image/') && Boolean(attachment.thumbnail)} class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
-                    {#if attachment.mimeType.startsWith('image/') && attachment.thumbnail}
-                      <span class="file-preview"><img src={attachment.thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
-                    {:else}
+              {@const items = attachmentsFor(memo)}
+              {@const images = items.filter(isAlbumImage)}
+              {@const files = items.filter((attachment) => !isAlbumImage(attachment))}
+              {#if images.length}
+                <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length}>
+                  {#if images.length === 1}
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image" onclick={() => openAttachment(images[0])}>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                    </button>
+                  {:else}
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image hero" onclick={() => openAttachment(images[0])}>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                    </button>
+                    <div class="album-rest">
+                      {#each images.slice(1) as attachment (attachment.id)}
+                        <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment image" onclick={() => openAttachment(attachment)}>
+                          <span class="file-preview"><img src={attachment.thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              {#if files.length}
+                <div class="attachments">
+                  {#each files as attachment (attachment.id)}
+                    <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
                       <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span><span class="dl-mark" aria-hidden="true">↓</span></span>
-                    {/if}
-                    <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
-                  </button>
-                {/each}
-              </div>
+                      <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             {/if}
             <footer>
               <time datetime={memo.createdAt}>{new Date(memo.createdAt).toLocaleString()}</time>
@@ -536,7 +599,7 @@
           <div class="compose-row">
             <button class="attach" aria-label="Attach files" onclick={() => fileInput.click()}>＋</button>
             <input bind:this={fileInput} class="hidden" type="file" multiple onchange={(event) => handleFiles(event.currentTarget.files)} />
-            <textarea bind:value={body} onkeydown={handleComposerKey} onpaste={handlePaste} rows="1" enterkeyhint="send" placeholder="Write or paste a memo…" aria-label="Memo text"></textarea>
+            <textarea bind:value={body} onkeydown={handleComposerKey} rows="1" enterkeyhint="send" placeholder="Write or paste a memo…" aria-label="Memo text"></textarea>
             <button class="send" aria-label="Send memo" onclick={submitMemo}>↑</button>
           </div>
           <div class="tag-row">
@@ -544,6 +607,9 @@
             {#each allTags.filter((tag) => !explicitTags.includes(tag)).slice(0, 6) as tag}<button onclick={() => addTag(tag)}>#{tag}</button>{/each}
           </div>
         </div>
+      {/if}
+      {#if draggingFiles}
+        <div class="drop-overlay" aria-hidden="true">Drop files to attach</div>
       {/if}
     </section>
   </div>

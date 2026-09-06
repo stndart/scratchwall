@@ -1,4 +1,4 @@
-const THUMBNAIL_SIZE = 480;
+const THUMBNAIL_SIZE = 960;
 
 export async function createThumbnail(file: File): Promise<string | undefined> {
   if (!file.type.startsWith('image/')) return undefined;
