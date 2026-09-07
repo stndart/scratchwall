@@ -26,7 +26,7 @@ build-android:
 build-linux:
     .\scripts\build-release.ps1 -Linux
 
-[doc("Build a static musl Telegram bot ELF into artifacts/linux")]
+[doc("Build the Telegram bot Linux ELF into artifacts/linux")]
 build-telegram:
     docker build -f build/telegram-bot.Dockerfile -t scratchwall-telegram-builder .
     New-Item -ItemType Directory -Force -Path artifacts\linux | Out-Null
