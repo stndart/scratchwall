@@ -17,6 +17,7 @@ export interface Memo {
   tags: string[];
   attachmentIds: string[];
   createdAt: string;
+  bumpedAt?: string;
   updatedAt: string;
   syncState: SyncState;
 }
@@ -82,4 +83,3 @@ export interface SearchDocument {
   spaceId: string;
   haystack: string;
 }
-

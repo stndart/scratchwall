@@ -23,6 +23,7 @@
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
+  import { compareMemoOrder, swipeAction } from './lib/memoActions';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -54,11 +55,15 @@
   let disconnectSocket: (() => void) | undefined;
   let syncFlight: Promise<void> | undefined;
   let stickToBottom = true;
+  let selecting = false;
+  let selectedMemoIds = new Set<string>();
+  let movingMemoIds: string[] = [];
+  let swipe: { memo: Memo; element: HTMLElement; startX: number; startY: number; x: number; y: number } | undefined;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
   $: visibleMemos = memos.filter((memo) =>
     query.trim() ? resultIds.has(memo.id) : memo.spaceId === selectedSpace
-  );
+  ).sort(compareMemoOrder);
   $: renderedMemos = query.trim()
     ? visibleMemos.slice(0, renderLimit)
     : visibleMemos.slice(Math.max(0, visibleMemos.length - renderLimit));
@@ -91,6 +96,8 @@
     query = '';
     renderLimit = 200;
     sidebarOpen = false;
+    selecting = false;
+    selectedMemoIds = new Set();
     void scrollNewest();
   }
 
@@ -202,6 +209,7 @@
       tags: mergeTags(body, explicitTags),
       attachmentIds,
       createdAt: editing?.createdAt ?? now,
+      bumpedAt: editing?.bumpedAt,
       updatedAt: now,
       syncState: 'pending'
     };
@@ -222,9 +230,59 @@
     selectedFiles = [];
   }
 
+  function toggleMemoSelection(id: string) {
+    const next = new Set(selectedMemoIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedMemoIds = next;
+  }
+
+  function leaveSelection() {
+    selecting = false;
+    selectedMemoIds = new Set();
+  }
+
+  async function updateMemos(ids: Iterable<string>, update: (memo: Memo, now: string) => Memo) {
+    const now = new Date().toISOString();
+    const wanted = new Set(ids);
+    for (const memo of memos.filter((item) => wanted.has(item.id))) {
+      const changed = update(memo, now);
+      await putMemo(changed, operation('upsert_memo', changed.id, changed));
+    }
+    await refresh();
+    void sync();
+  }
+
+  async function bumpMemos(ids: Iterable<string>) {
+    await updateMemos(ids, (memo, now) => ({ ...memo, bumpedAt: now, updatedAt: now, syncState: 'pending' }));
+    await scrollNewest(true);
+    leaveSelection();
+  }
+
+  function startMove(ids: Iterable<string>) {
+    movingMemoIds = [...ids];
+  }
+
+  async function moveMemos(spaceId: string) {
+    const ids = movingMemoIds;
+    movingMemoIds = [];
+    await updateMemos(ids, (memo, now) => ({ ...memo, spaceId, updatedAt: now, syncState: 'pending' }));
+    leaveSelection();
+  }
+
   async function removeMemo(memo: Memo) {
     if (!confirm('Permanently delete this memo and its files?')) return;
     await deleteMemoLocal(memo.id, operation('delete_memo', memo.id));
+    await refresh();
+    void sync();
+  }
+
+  async function removeMemos(ids: Iterable<string>) {
+    const wanted = new Set(ids);
+    const selected = memos.filter((memo) => wanted.has(memo.id));
+    if (!selected.length || !confirm(`Permanently delete ${selected.length} selected ${selected.length === 1 ? 'memo' : 'memos'} and their files?`)) return;
+    for (const memo of selected) await deleteMemoLocal(memo.id, operation('delete_memo', memo.id));
+    leaveSelection();
     await refresh();
     void sync();
   }
@@ -282,6 +340,64 @@
       }
     }
     downloadBlob(blob, attachment.filename, attachment.mimeType.startsWith('image/'));
+  }
+
+  async function downloadFiles(ids: Iterable<string>) {
+    const memoIds = new Set(ids);
+    const files = attachments.filter((attachment) => memoIds.has(attachment.memoId));
+    if (!files.length) {
+      error = 'The selected memos do not contain files.';
+      return;
+    }
+    for (const attachment of files) {
+      try {
+        let blob = (await getAttachment(attachment.id))?.blob;
+        if (!blob && isNative()) {
+          await downloadNativeAttachment(attachment);
+          blob = (await getAttachment(attachment.id))?.blob;
+        } else if (!blob) {
+          blob = await downloadAttachment(attachment.id);
+          await putAttachment({ ...attachment, cacheState: 'cached', remoteReady: true }, blob);
+        }
+        if (!blob) throw new Error(`Could not read ${attachment.filename}`);
+        downloadBlob(blob, attachment.filename);
+      } catch (value) {
+        error = value instanceof Error ? value.message : String(value);
+        return;
+      }
+    }
+    await refresh();
+  }
+
+  function startSwipe(event: PointerEvent, memo: Memo) {
+    if (event.pointerType !== 'touch' || selecting || (event.target as Element).closest('button, a, input')) return;
+    const element = event.currentTarget as HTMLElement;
+    swipe = { memo, element, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY };
+    element.setPointerCapture(event.pointerId);
+  }
+
+  function moveSwipe(event: PointerEvent) {
+    if (!swipe) return;
+    swipe.x = event.clientX;
+    swipe.y = event.clientY;
+    const deltaX = swipe.x - swipe.startX;
+    const deltaY = swipe.y - swipe.startY;
+    if (Math.abs(deltaX) <= Math.abs(deltaY)) return;
+    const offset = Math.max(-120, Math.min(120, deltaX));
+    swipe.element.style.setProperty('--swipe-x', `${offset}px`);
+    swipe.element.dataset.swipe = offset > 0 ? 'bump' : 'delete';
+  }
+
+  function finishSwipe(cancelled = false) {
+    if (!swipe) return;
+    const current = swipe;
+    swipe = undefined;
+    current.element.style.setProperty('--swipe-x', '0px');
+    delete current.element.dataset.swipe;
+    if (cancelled) return;
+    const action = swipeAction(current.x - current.startX, current.y - current.startY);
+    if (action === 'bump') void bumpMemos([current.memo.id]);
+    if (action === 'delete') void removeMemo(current.memo);
   }
 
   function linkParts(text: string): Array<{ value: string; href?: string }> {
@@ -509,6 +625,9 @@
           <h1>{query ? 'Search' : activeSpace?.name ?? 'Scratchwall'}</h1>
           <small>{query ? `${visibleMemos.length} matches across all spaces` : `${visibleMemos.length} memos`}</small>
         </div>
+        <button class="select-toggle" class:active={selecting} onclick={() => selecting ? leaveSelection() : selecting = true}>
+          {selecting ? 'Cancel' : 'Select'}
+        </button>
         <label class="search">
           <span>⌕</span>
           <input bind:value={query} oninput={() => renderLimit = 200} placeholder="Search everything" aria-label="Search everything" />
@@ -520,6 +639,17 @@
         <a class="update" href={updateAvailable.url} target="_blank" rel="noreferrer">Scratchwall {updateAvailable.version} is available</a>
       {/if}
       {#if error}<button class="error-banner" onclick={() => error = ''}>{error}<span>×</span></button>{/if}
+
+      {#if selecting}
+        <div class="batch-bar" aria-label="Selected memo actions">
+          <strong>{selectedMemoIds.size} selected</strong>
+          <button onclick={() => selectedMemoIds = new Set(renderedMemos.map(({ id }) => id))}>All shown</button>
+          <button disabled={!selectedMemoIds.size} onclick={() => bumpMemos(selectedMemoIds)}>Bump</button>
+          <button disabled={!selectedMemoIds.size} onclick={() => startMove(selectedMemoIds)}>Move</button>
+          <button disabled={!selectedMemoIds.size} onclick={() => downloadFiles(selectedMemoIds)}>Download files</button>
+          <button class="danger" disabled={!selectedMemoIds.size} onclick={() => removeMemos(selectedMemoIds)}>Delete</button>
+        </div>
+      {/if}
 
       <div class="feed" bind:this={feed} onscroll={onFeedScroll}>
         {#if visibleMemos.length === 0}
@@ -535,7 +665,23 @@
           </button>
         {/if}
         {#each renderedMemos as memo (memo.id)}
-          <article data-memo-id={memo.id} class="memo" class:pending={memo.syncState === 'pending'} class:error={memo.syncState === 'error'}>
+          <div
+            role="group"
+            aria-label="Memo"
+            data-memo-id={memo.id}
+            class="memo-wrap"
+            class:selected={selectedMemoIds.has(memo.id)}
+            onpointerdown={(event) => startSwipe(event, memo)}
+            onpointermove={moveSwipe}
+            onpointerup={() => finishSwipe()}
+            onpointercancel={() => finishSwipe(true)}
+          >
+          <article class="memo" class:pending={memo.syncState === 'pending'} class:error={memo.syncState === 'error'}>
+            {#if selecting}
+              <button class="select-memo" class:selected={selectedMemoIds.has(memo.id)} aria-label={`${selectedMemoIds.has(memo.id) ? 'Deselect' : 'Select'} memo`} onclick={() => toggleMemoSelection(memo.id)}>
+                {selectedMemoIds.has(memo.id) ? '✓' : ''}
+              </button>
+            {/if}
             {#if memo.body}<p>{#each linkParts(memo.body) as part}{#if part.href}<a href={part.href} target="_blank" rel="noreferrer">{part.value}</a>{:else}{part.value}{/if}{/each}</p>{/if}
             {#if memo.tags.length}
               <div class="tags">{#each memo.tags as tag}<button onclick={() => query = tag}>#{tag}</button>{/each}</div>
@@ -548,16 +694,16 @@
                 <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length}>
                   {#if images.length === 1}
                     <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image" onclick={() => openAttachment(images[0])}>
-                      <span class="file-preview"><img src={images[0].thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                   {:else}
                     <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image hero" onclick={() => openAttachment(images[0])}>
-                      <span class="file-preview"><img src={images[0].thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                     <div class="album-rest">
                       {#each images.slice(1) as attachment (attachment.id)}
                         <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment image" onclick={() => openAttachment(attachment)}>
-                          <span class="file-preview"><img src={attachment.thumbnail} alt="" /><span class="dl-mark" aria-hidden="true">↓</span></span>
+                          <span class="file-preview"><img src={attachment.thumbnail} alt="" />{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                         </button>
                       {/each}
                     </div>
@@ -568,7 +714,7 @@
                 <div class="attachments">
                   {#each files as attachment (attachment.id)}
                     <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
-                      <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span><span class="dl-mark" aria-hidden="true">↓</span></span>
+                      <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span>{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                       <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
                     </button>
                   {/each}
@@ -576,12 +722,17 @@
               {/if}
             {/if}
             <footer>
-              <time datetime={memo.createdAt}>{new Date(memo.createdAt).toLocaleString()}</time>
+              <time datetime={memo.createdAt} title={memo.bumpedAt ? `Bumped ${new Date(memo.bumpedAt).toLocaleString()}` : undefined}>{new Date(memo.createdAt).toLocaleString()}</time>
               <span class="sync-mark" title={memo.syncState}>{memo.syncState === 'pending' ? '◌' : memo.syncState === 'error' ? '!' : '✓'}</span>
-              <button onclick={() => editMemo(memo)}>Edit</button>
-              <button class="danger" onclick={() => removeMemo(memo)}>Delete</button>
+              <span class="memo-actions">
+                <button aria-label="Bump memo" title="Bump" onclick={() => bumpMemos([memo.id])}>⤒</button>
+                <button aria-label="Move memo" title="Move" onclick={() => startMove([memo.id])}>▣</button>
+                <button aria-label="Edit memo" title="Edit" onclick={() => editMemo(memo)}>✎</button>
+                <button class="danger" aria-label="Delete memo" title="Delete" onclick={() => removeMemo(memo)}>⌫</button>
+              </span>
             </footer>
           </article>
+          </div>
         {/each}
       </div>
 
@@ -610,6 +761,19 @@
       {/if}
       {#if draggingFiles}
         <div class="drop-overlay" aria-hidden="true">Drop files to attach</div>
+      {/if}
+      {#if movingMemoIds.length}
+        <div class="dialog-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) movingMemoIds = []; }}>
+          <div class="move-dialog" role="dialog" aria-modal="true" aria-labelledby="move-title">
+            <div><h2 id="move-title">Move {movingMemoIds.length === 1 ? 'memo' : `${movingMemoIds.length} memos`}</h2><button class="icon-button" aria-label="Close" onclick={() => movingMemoIds = []}>×</button></div>
+            <p>Choose a destination folder.</p>
+            <div class="move-options">
+              {#each spaces as space}
+                <button onclick={() => moveMemos(space.id)}>{space.isInbox ? '⌂' : '·'} {space.name}</button>
+              {/each}
+            </div>
+          </div>
+        </div>
       {/if}
     </section>
   </div>

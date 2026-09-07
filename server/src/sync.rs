@@ -387,6 +387,7 @@ mod tests {
             tags: vec!["link".into()],
             attachment_ids: vec![],
             created_at: now.clone(),
+            bumped_at: Some("2026-01-02T00:00:00Z".into()),
             updated_at: now.clone(),
             sync_state: "pending".into(),
         };
@@ -416,6 +417,14 @@ mod tests {
                 .iter()
                 .any(|change| change.entity_id == memo.id)
         );
+        assert!(response.changes.iter().any(|change| {
+            change.entity_id == memo.id
+                && change
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("bumpedAt"))
+                    == Some(&serde_json::json!("2026-01-02T00:00:00Z"))
+        }));
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM changes WHERE user_id=? AND entity_id=?")
                 .bind(user1)
