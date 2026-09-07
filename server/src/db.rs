@@ -58,6 +58,9 @@ async fn cleanup_stale_state(pool: &SqlitePool, data_dir: &Path) -> Result<()> {
     sqlx::query("DELETE FROM sessions WHERE expires_at < unixepoch()")
         .execute(pool)
         .await?;
+    sqlx::query("DELETE FROM telegram_bind_challenges WHERE expires_at < unixepoch()")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -169,8 +172,40 @@ CREATE TABLE IF NOT EXISTS processed_ops (
   created_at INTEGER NOT NULL,
   PRIMARY KEY(user_id, op_id)
 );
+CREATE TABLE IF NOT EXISTS ingest_ops (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  memo_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS telegram_binds (
+  telegram_user_id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS telegram_bind_challenges (
+  token_hash TEXT PRIMARY KEY,
+  telegram_user_id INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_telegram_bind_challenge_per_user
+  ON telegram_bind_challenges(telegram_user_id);
 "#).execute(pool).await?;
+    add_auth_flow_return_path(pool).await?;
     Ok(())
+}
+
+async fn add_auth_flow_return_path(pool: &SqlitePool) -> Result<()> {
+    match sqlx::query("ALTER TABLE auth_flows ADD COLUMN return_path TEXT")
+        .execute(pool)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub async fn ensure_user(pool: &SqlitePool, issuer: &str, profile: &Profile) -> Result<i64> {

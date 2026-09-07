@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod ingest;
 mod models;
 mod sync;
 mod uploads;
@@ -11,7 +12,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        Extension, Path, State, WebSocketUpgrade,
+        DefaultBodyLimit, Extension, Path, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::{HeaderName, HeaderValue, Method, Request, StatusCode, header},
@@ -223,7 +224,8 @@ fn allows_same_origin_frame(path: &str) -> bool {
 
 async fn security_headers(request: Request<Body>, next: middleware::Next) -> Response {
     let path = request.uri().path().to_string();
-    let sensitive = path.starts_with("/api/") || path.starts_with("/auth/");
+    let sensitive =
+        path.starts_with("/api/") || path.starts_with("/auth/") || path.starts_with("/telegram/");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -318,6 +320,21 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             auth::require_auth,
         ));
+    let ingest_limit = (config.max_attachment_bytes as usize)
+        .saturating_mul(8)
+        .saturating_add(1024 * 1024);
+    let ingest_routes = Router::new()
+        .route("/api/v1/ingest", post(ingest::ingest))
+        .layer(DefaultBodyLimit::max(ingest_limit));
+    let ingest_bind_routes = Router::new()
+        .route(
+            "/api/v1/ingest/telegram/bind",
+            post(ingest::create_telegram_bind),
+        )
+        .route(
+            "/telegram/bind/{token}",
+            get(ingest::complete_telegram_bind),
+        );
 
     tokio::fs::create_dir_all(config.data_dir.join("downloads")).await?;
     let static_files = ServeDir::new(&config.web_dir)
@@ -356,6 +373,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/downloads", get(downloads_page))
         .route("/downloads/", get(downloads_page))
         .route("/downloads/{name}", get(download_artifact))
+        .merge(ingest_routes)
+        .merge(ingest_bind_routes)
         .nest("/api/v1", protected)
         .fallback_service(static_files)
         .layer(cors)
@@ -423,6 +442,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn telegram_bind_pages_are_not_stored() {
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        let app = Router::new()
+            .route("/telegram/bind/{token}", get(ok))
+            .layer(middleware::from_fn(security_headers));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://{addr}/telegram/bind/token"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[tokio::test]
     async fn spa_shell_sends_no_cache() {
         async fn ok() -> &'static str {
             "ok"
@@ -470,6 +514,7 @@ mod tests {
             allowed_groups: Arc::new(vec!["admins".into()]),
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
+            ingest_token_hash: None,
         });
         let (changes, _) = tokio::sync::broadcast::channel(8);
         let state = AppState {

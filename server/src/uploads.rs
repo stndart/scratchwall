@@ -471,6 +471,7 @@ mod tests {
             allowed_groups: std::sync::Arc::new(vec!["admins".into()]),
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
+            ingest_token_hash: None,
         };
         let (changes, _) = tokio::sync::broadcast::channel(8);
         (

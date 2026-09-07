@@ -13,7 +13,7 @@ use serde_json::Value;
 use sqlx::{Row, Sqlite, Transaction};
 use std::path::PathBuf;
 
-async fn next_seq(
+pub(crate) async fn next_seq(
     transaction: &mut Transaction<'_, Sqlite>,
     user_id: i64,
 ) -> Result<i64, sqlx::Error> {
@@ -23,7 +23,7 @@ async fn next_seq(
         .await
 }
 
-async fn record_change<T: Serialize>(
+pub(crate) async fn record_change<T: Serialize>(
     transaction: &mut Transaction<'_, Sqlite>,
     user_id: i64,
     seq: i64,
@@ -343,6 +343,7 @@ mod tests {
             allowed_groups: Arc::new(vec!["devs".into()]),
             session_key: [0; 32],
             max_attachment_bytes: 1024,
+            ingest_token_hash: None,
         });
         let (sender, _) = tokio::sync::broadcast::channel(8);
         let state = AppState {

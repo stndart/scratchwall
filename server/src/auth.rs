@@ -39,6 +39,7 @@ pub struct LoginQuery {
     mode: Option<String>,
     code_challenge: Option<String>,
     silent: Option<String>,
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -202,10 +203,23 @@ async fn renew_membership(state: &AppState, user_id: i64) -> Result<(), AppError
     Ok(())
 }
 
-fn random_token(bytes: usize) -> String {
+pub(crate) fn random_token(bytes: usize) -> String {
     let mut value = vec![0u8; bytes];
     OsRng.fill_bytes(&mut value);
     URL_SAFE_NO_PAD.encode(value)
+}
+
+pub(crate) fn safe_return_path(next: Option<&str>) -> Option<String> {
+    let next = next?.trim();
+    let token = next.strip_prefix("/telegram/bind/")?;
+    if token.is_empty()
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return None;
+    }
+    Some(next.to_owned())
 }
 
 pub fn login_is_silent(silent: Option<&str>) -> bool {
@@ -328,8 +342,13 @@ pub async fn login(
     let nonce = random_token(24);
     let verifier = random_token(48);
     let expires = Utc::now().timestamp() + 600;
-    sqlx::query("INSERT INTO auth_flows(state_hash,nonce,oidc_verifier,mode,native_challenge,expires_at) VALUES(?,?,?,?,?,?)")
-        .bind(token_hash(&state_value)).bind(&nonce).bind(seal_credential(&state, &verifier)?).bind(&mode).bind(query.code_challenge).bind(expires).execute(&state.db).await?;
+    let return_path = if mode == "web" {
+        safe_return_path(query.next.as_deref())
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO auth_flows(state_hash,nonce,oidc_verifier,mode,native_challenge,expires_at,return_path) VALUES(?,?,?,?,?,?,?)")
+        .bind(token_hash(&state_value)).bind(&nonce).bind(seal_credential(&state, &verifier)?).bind(&mode).bind(query.code_challenge).bind(expires).bind(return_path).execute(&state.db).await?;
     let silent = login_is_silent(query.silent.as_deref());
     let callback = format!("{}/auth/oidc/callback", state.config.public_base_url);
     let url = authorization_url(
@@ -426,12 +445,13 @@ pub async fn callback(
     if jar.get("scratchwall_login").map(Cookie::value) != Some(state_value) {
         return Err(AppError::Forbidden);
     }
-    let row = sqlx::query("DELETE FROM auth_flows WHERE state_hash=? AND expires_at>? RETURNING nonce,oidc_verifier,mode,native_challenge")
+    let row = sqlx::query("DELETE FROM auth_flows WHERE state_hash=? AND expires_at>? RETURNING nonce,oidc_verifier,mode,native_challenge,return_path")
         .bind(token_hash(state_value)).bind(Utc::now().timestamp()).fetch_optional(&state.db).await?.ok_or_else(|| AppError::BadRequest("login state expired or invalid".into()))?;
     let nonce: String = row.get("nonce");
     let verifier = open_credential(&state, row.get::<String, _>("oidc_verifier").as_str())?;
     let mode: String = row.get("mode");
     let native_challenge: Option<String> = row.get("native_challenge");
+    let return_path: Option<String> = row.get("return_path");
     let callback = format!("{}/auth/oidc/callback", state.config.public_base_url);
     let token: TokenResponse = state
         .http
@@ -562,7 +582,8 @@ pub async fn callback(
     let (session, expires_at) = create_session(&state, user_id).await?;
     let secure = state.config.public_base_url.starts_with("https://");
     let cookie = session_cookie(&session, secure);
-    let mut response = Redirect::to("/").into_response();
+    let dest = safe_return_path(return_path.as_deref()).unwrap_or_else(|| "/".into());
+    let mut response = Redirect::to(&dest).into_response();
     response
         .headers_mut()
         .append(header::SET_COOKIE, cookie.to_string().parse().unwrap());
@@ -659,16 +680,35 @@ fn extract_token(request: &Request<Body>) -> Option<String> {
     {
         return Some(value.to_owned());
     }
-    request
-        .headers()
+    session_cookie_token(request.headers())
+}
+
+pub(crate) fn session_cookie_token(headers: &HeaderMap) -> Option<String> {
+    headers
         .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .and_then(|cookies| {
             cookies
                 .split(';')
                 .map(str::trim)
                 .find_map(|item| item.strip_prefix("scratchwall_session=").map(str::to_owned))
         })
+}
+
+pub(crate) async fn session_user_id(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<i64>, AppError> {
+    let Some(token) = session_cookie_token(headers) else {
+        return Ok(None);
+    };
+    let user_id =
+        sqlx::query_scalar("SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?")
+            .bind(token_hash(&token))
+            .bind(Utc::now().timestamp())
+            .fetch_optional(&state.db)
+            .await?;
+    Ok(user_id)
 }
 
 pub async fn require_auth(
@@ -790,6 +830,7 @@ mod tests {
             allowed_groups: std::sync::Arc::new(vec!["admins".into()]),
             session_key: [7; 32],
             max_attachment_bytes: 1024,
+            ingest_token_hash: None,
         };
         let (changes, _) = tokio::sync::broadcast::channel(1);
         let state = AppState {
@@ -856,6 +897,25 @@ mod tests {
         assert!(silent_auth_failed("interaction_required"));
         assert!(silent_auth_failed("consent_required"));
         assert!(!silent_auth_failed("access_denied"));
+    }
+
+    #[test]
+    fn telegram_bind_return_paths_are_strict() {
+        assert_eq!(
+            safe_return_path(Some("/telegram/bind/abc-DEF_12")),
+            Some("/telegram/bind/abc-DEF_12".into())
+        );
+        assert_eq!(
+            safe_return_path(Some(" /telegram/bind/token ")),
+            Some("/telegram/bind/token".into())
+        );
+        assert_eq!(safe_return_path(None), None);
+        assert_eq!(safe_return_path(Some("/")), None);
+        assert_eq!(safe_return_path(Some("/telegram/bind/")), None);
+        assert_eq!(safe_return_path(Some("https://evil.example")), None);
+        assert_eq!(safe_return_path(Some("//evil.example")), None);
+        assert_eq!(safe_return_path(Some("/telegram/bind/../secrets")), None);
+        assert_eq!(safe_return_path(Some("/telegram/bind/token?x=1")), None);
     }
 
     #[test]

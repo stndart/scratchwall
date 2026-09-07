@@ -5,6 +5,7 @@ target/
 data/
 .env
 .secrets/
+/bot/
 *.jks
 *.keystore
 apps/web/src-tauri/gen/schemas/

@@ -13,6 +13,9 @@ services:
       WEB_DIR: /app/web
       VIRTUAL_HOST: scratch.morad.uk
       VIRTUAL_PORT: 8080
+    labels:
+      # docker-gen pins the container IP; keepalive then 502s after recreate.
+      com.github.nginx-proxy.nginx-proxy.keepalive: "disabled"
     volumes:
       - ./data:/data
     networks:

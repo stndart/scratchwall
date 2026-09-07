@@ -15,6 +15,7 @@ pub struct Config {
     pub allowed_groups: Arc<Vec<String>>,
     pub session_key: [u8; 32],
     pub max_attachment_bytes: u64,
+    pub ingest_token_hash: Option<String>,
 }
 
 impl Config {
@@ -66,6 +67,10 @@ impl Config {
                     );
                     Ok(value)
                 })?,
+            ingest_token_hash: env::var("INGEST_TOKEN")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| hex::encode(sha2::Sha256::digest(value.as_bytes()))),
         })
     }
 }
