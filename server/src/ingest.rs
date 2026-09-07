@@ -142,8 +142,9 @@ pub async fn create_telegram_bind(
     .await?;
     Ok(Json(TelegramBindResponse {
         url: Some(format!(
-            "{}/telegram/bind/{token}",
-            state.config.public_base_url
+            "{}{}",
+            state.config.public_base_url,
+            auth::telegram_bind_path(&token)
         )),
         display_name: None,
     }))
@@ -185,10 +186,7 @@ async fn complete_telegram_bind_inner(
         ));
     }
     let Some(user_id) = auth::session_user_id(state, headers).await? else {
-        let next = format!("/telegram/bind/{token}");
-        return Ok(
-            Redirect::to(&format!("/api/v1/auth/login?mode=web&next={next}")).into_response(),
-        );
+        return Ok(Redirect::to(&auth::telegram_bind_login_redirect(token)).into_response());
     };
     let telegram_user_id: Option<i64> = sqlx::query_scalar(
         "DELETE FROM telegram_bind_challenges WHERE token_hash=? AND expires_at>? RETURNING telegram_user_id",
@@ -870,6 +868,7 @@ mod tests {
             .route("/api/v1/ingest", post(ingest))
             .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
             .route("/api/v1/ingest/telegram/bind", post(create_telegram_bind))
+            .route("/auth/telegram/bind/{token}", get(complete_telegram_bind))
             .route("/telegram/bind/{token}", get(complete_telegram_bind))
             .route("/api/v1/auth/login", get(crate::auth::login))
             .with_state(state);
@@ -1208,9 +1207,9 @@ mod tests {
         assert_eq!(created.status(), axum::http::StatusCode::OK);
         let payload: serde_json::Value = created.json().await.unwrap();
         let url = payload["url"].as_str().unwrap();
-        assert!(url.starts_with("https://scratch.test/telegram/bind/"));
+        assert!(url.starts_with("https://scratch.test/auth/telegram/bind/"));
         let bind_token = url.rsplit('/').next().unwrap();
-        let path = format!("/telegram/bind/{bind_token}");
+        let path = format!("/auth/telegram/bind/{bind_token}");
 
         let redirect = client.get(format!("{base}{path}")).send().await.unwrap();
         assert_eq!(redirect.status(), axum::http::StatusCode::SEE_OTHER);
@@ -1220,7 +1219,10 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(location, format!("/api/v1/auth/login?mode=web&next={path}"));
+        assert_eq!(
+            location,
+            crate::auth::telegram_bind_login_redirect(bind_token)
+        );
 
         insert_session(&directory, "One", "session-token").await;
         let complete = client
@@ -1258,7 +1260,7 @@ mod tests {
         let (directory, base, client) = start_server(token, false).await;
         let good = client
             .get(format!(
-                "{base}/api/v1/auth/login?mode=web&next=/telegram/bind/abcDEF_12"
+                "{base}/api/v1/auth/login?mode=web&next=/auth/telegram/bind/abcDEF_12"
             ))
             .send()
             .await
@@ -1269,7 +1271,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(return_path.as_deref(), Some("/telegram/bind/abcDEF_12"));
+        assert_eq!(
+            return_path.as_deref(),
+            Some("/auth/telegram/bind/abcDEF_12")
+        );
 
         sqlx::query("DELETE FROM auth_flows")
             .execute(&pool)

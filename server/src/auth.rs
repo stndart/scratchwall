@@ -209,9 +209,26 @@ pub(crate) fn random_token(bytes: usize) -> String {
     URL_SAFE_NO_PAD.encode(value)
 }
 
+const TELEGRAM_BIND_PREFIXES: [&str; 2] = ["/auth/telegram/bind/", "/telegram/bind/"];
+
+pub(crate) fn telegram_bind_path(token: &str) -> String {
+    format!("/auth/telegram/bind/{token}")
+}
+
+pub(crate) fn telegram_bind_login_redirect(token: &str) -> String {
+    let next = telegram_bind_path(token);
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("mode", "web")
+        .append_pair("next", &next)
+        .finish();
+    format!("/api/v1/auth/login?{query}")
+}
+
 pub(crate) fn safe_return_path(next: Option<&str>) -> Option<String> {
     let next = next?.trim();
-    let token = next.strip_prefix("/telegram/bind/")?;
+    let token = TELEGRAM_BIND_PREFIXES
+        .iter()
+        .find_map(|prefix| next.strip_prefix(prefix))?;
     if token.is_empty()
         || !token
             .bytes()
@@ -902,20 +919,34 @@ mod tests {
     #[test]
     fn telegram_bind_return_paths_are_strict() {
         assert_eq!(
+            safe_return_path(Some("/auth/telegram/bind/abc-DEF_12")),
+            Some("/auth/telegram/bind/abc-DEF_12".into())
+        );
+        assert_eq!(
             safe_return_path(Some("/telegram/bind/abc-DEF_12")),
             Some("/telegram/bind/abc-DEF_12".into())
         );
         assert_eq!(
-            safe_return_path(Some(" /telegram/bind/token ")),
-            Some("/telegram/bind/token".into())
+            safe_return_path(Some(" /auth/telegram/bind/token ")),
+            Some("/auth/telegram/bind/token".into())
         );
         assert_eq!(safe_return_path(None), None);
         assert_eq!(safe_return_path(Some("/")), None);
-        assert_eq!(safe_return_path(Some("/telegram/bind/")), None);
+        assert_eq!(safe_return_path(Some("/auth/telegram/bind/")), None);
         assert_eq!(safe_return_path(Some("https://evil.example")), None);
         assert_eq!(safe_return_path(Some("//evil.example")), None);
-        assert_eq!(safe_return_path(Some("/telegram/bind/../secrets")), None);
-        assert_eq!(safe_return_path(Some("/telegram/bind/token?x=1")), None);
+        assert_eq!(
+            safe_return_path(Some("/auth/telegram/bind/../secrets")),
+            None
+        );
+        assert_eq!(
+            safe_return_path(Some("/auth/telegram/bind/token?x=1")),
+            None
+        );
+        assert_eq!(
+            telegram_bind_login_redirect("tok"),
+            "/api/v1/auth/login?mode=web&next=%2Fauth%2Ftelegram%2Fbind%2Ftok"
+        );
     }
 
     #[test]

@@ -21,7 +21,13 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/auth\//, /^\/downloads\//, /^\/healthz$/],
+        navigateFallbackDenylist: [
+          /^\/api\//,
+          /^\/auth\//,
+          /^\/downloads\//,
+          /^\/healthz$/,
+          /^\/telegram\//
+        ],
         runtimeCaching: [],
         cleanupOutdatedCaches: true,
         skipWaiting: true,
@@ -34,6 +40,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:8080',
       '/auth': 'http://127.0.0.1:8080',
+      '/telegram': 'http://127.0.0.1:8080',
       '/downloads': 'http://127.0.0.1:8080',
       '/healthz': 'http://127.0.0.1:8080'
     }

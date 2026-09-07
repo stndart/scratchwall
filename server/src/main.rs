@@ -332,6 +332,10 @@ async fn main() -> anyhow::Result<()> {
             post(ingest::create_telegram_bind),
         )
         .route(
+            "/auth/telegram/bind/{token}",
+            get(ingest::complete_telegram_bind),
+        )
+        .route(
             "/telegram/bind/{token}",
             get(ingest::complete_telegram_bind),
         );
