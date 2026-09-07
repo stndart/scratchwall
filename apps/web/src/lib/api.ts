@@ -4,6 +4,7 @@ import { clearNativeToken, isNative, nativeToken, startNativeLogin } from './nat
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 let requests = new AbortController();
+let silentRefresh: Promise<boolean> | undefined;
 export function cancelRequests() {
   requests.abort();
   requests = new AbortController();
@@ -13,12 +14,61 @@ function canTransfer() { return navigator.onLine && document.visibilityState !==
 
 export class UnauthorizedError extends Error {}
 
-async function request(path: string, init: RequestInit = {}) {
+export function silentLoginUrl(): string {
+  return `${apiOrigin()}/api/v1/auth/login?mode=web&silent=1`;
+}
+
+export async function silentReauth(): Promise<boolean> {
+  if (isNative() || localStorage.getItem('scratchwall.loggedOut')) return false;
+  if (!silentRefresh) silentRefresh = runSilentReauth().finally(() => { silentRefresh = undefined; });
+  return silentRefresh;
+}
+
+async function runSilentReauth(): Promise<boolean> {
+  if (typeof document === 'undefined') return false;
+  return new Promise((resolve) => {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('hidden', '');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
+    iframe.src = silentLoginUrl();
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearInterval(poll);
+      window.clearTimeout(timer);
+      iframe.remove();
+      resolve(ok);
+    };
+    const poll = window.setInterval(() => {
+      void fetch(`${apiOrigin()}/api/v1/auth/me`, { credentials: 'include' })
+        .then((response) => { if (response.ok) finish(true); })
+        .catch(() => { /* still unauthorized or offline */ });
+    }, 400);
+    const timer = window.setTimeout(() => finish(false), 8_000);
+    iframe.addEventListener('load', () => {
+      try {
+        const href = iframe.contentWindow?.location.href ?? '';
+        if (!href) return;
+        const url = new URL(href);
+        if (url.origin !== location.origin) return;
+        if (url.searchParams.get('auth') === 'required') finish(false);
+      } catch { /* still on the identity provider */ }
+    });
+    document.body.append(iframe);
+  });
+}
+
+async function request(path: string, init: RequestInit = {}, retried = false) {
   const headers = new Headers(init.headers);
   const token = nativeToken();
   if (token) headers.set('authorization', `Bearer ${token}`);
   const response = await fetch(`${apiOrigin()}${path}`, { credentials: 'include', signal: requests.signal, ...init, headers });
-  if (response.status === 401) throw new UnauthorizedError('Sign in required');
+  if (response.status === 401) {
+    if (!retried && await silentReauth()) return request(path, init, true);
+    throw new UnauthorizedError('Sign in required');
+  }
   if (!response.ok) {
     const contentType = response.headers.get('content-type') ?? '';
     const body = contentType.includes('text/plain') || contentType.includes('application/json')

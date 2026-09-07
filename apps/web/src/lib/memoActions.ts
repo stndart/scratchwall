@@ -14,3 +14,15 @@ export function swipeAction(deltaX: number, deltaY: number, threshold = 72): 'bu
   if (Math.abs(deltaY) > Math.abs(deltaX) || Math.abs(deltaX) < threshold) return undefined;
   return deltaX > 0 ? 'bump' : 'delete';
 }
+
+export function isTapGesture(deltaX: number, deltaY: number, slop = 12): boolean {
+  return Math.abs(deltaX) < slop && Math.abs(deltaY) < slop;
+}
+
+export function swipeIgnoresTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  if (target.closest('a, input, textarea')) return true;
+  const button = target.closest('button');
+  if (!button) return false;
+  return !button.classList.contains('image');
+}

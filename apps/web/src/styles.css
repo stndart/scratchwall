@@ -75,10 +75,10 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .album { display: grid; gap: 2px; margin: 10px -17px 0; overflow: hidden; background: #0a0c11; }
 .album.bleed-top { margin-top: -15px; border-radius: 15px 15px 0 0; }
 .album-rest { display: grid; gap: 2px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
-.album .attachment.image { display: block; width: 100%; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.album .attachment.image { display: block; width: 100%; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; touch-action: pan-y; }
 .album .file-preview { display: block; position: relative; }
-.album-single .attachment.image img, .album .hero img { width: 100%; height: auto; max-height: min(70vh, 720px); display: block; object-fit: contain; }
-.album-rest .attachment.image img { width: 100%; height: 140px; display: block; object-fit: cover; }
+.album-single .attachment.image img, .album .hero img { width: 100%; height: auto; max-height: min(70vh, 720px); display: block; object-fit: contain; -webkit-user-drag: none; user-select: none; -webkit-touch-callout: none; }
+.album-rest .attachment.image img { width: 100%; height: 140px; display: block; object-fit: cover; -webkit-user-drag: none; user-select: none; -webkit-touch-callout: none; }
 .file-badge { position: relative; display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; margin-right: 10px; border-radius: 10px; background: #3a4154; color: #e8ebf5; font-size: 11px; font-weight: 700; letter-spacing: .03em; }
 .file-badge .ext { line-height: 1; }
 .dl-mark { position: absolute; right: 2px; bottom: 2px; width: 17px; height: 17px; display: grid; place-items: center; border-radius: 5px; background: #0d0f14dd; color: white; font-size: 11px; line-height: 1; pointer-events: none; }
@@ -95,7 +95,12 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .editing-note { padding: 2px 45px 6px; color: var(--accent-2); font-size: 12px; }.editing-note button { border: 0; background: none; color: var(--muted); cursor: pointer; }
 .drop-overlay { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; pointer-events: none; border: 2px dashed var(--accent); background: color-mix(in srgb, var(--accent) 22%, #0d0f14cc); color: white; font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
 .hidden { display: none; }
-.error-banner, .update { flex-shrink: 0; width: min(760px, calc(100% - 36px)); margin: 8px auto 0; padding: 9px 13px; border: 1px solid #723448; border-radius: 10px; background: #3a1e29; color: #ffb4c1; text-decoration: none; text-align: left; }.error-banner span { float: right; }.update { border-color: #46407a; background: #25213f; color: #c7c0ff; text-align: center; }
+.error-banner, .update { flex-shrink: 0; width: min(760px, calc(100% - 36px)); margin: 8px auto 0; padding: 9px 13px; border: 1px solid #723448; border-radius: 10px; background: #3a1e29; color: #ffb4c1; text-decoration: none; text-align: left; }
+.error-banner { display: flex; align-items: center; gap: 10px; }
+.error-banner .banner-text { flex: 1; min-width: 0; }
+.error-banner .banner-sign-in { flex-shrink: 0; padding: 6px 10px; border: 0; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font: inherit; }
+.error-banner .banner-dismiss { flex-shrink: 0; border: 0; background: none; color: inherit; cursor: pointer; font-size: 16px; }
+.update { border-color: #46407a; background: #25213f; color: #c7c0ff; text-align: center; }
 .batch-bar { display: flex; flex-shrink: 0; align-items: center; gap: 6px; width: min(760px, calc(100% - 36px)); margin: 8px auto 0; overflow-x: auto; padding: 7px; border: 1px solid #4d4779; border-radius: 12px; background: #1d1b2c; }
 .batch-bar strong { margin: 0 5px; color: var(--accent-2); white-space: nowrap; font-size: 13px; }
 .batch-bar button { flex-shrink: 0; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); cursor: pointer; }

@@ -42,7 +42,12 @@ Create one OIDC app with these exact values:
 - Redirect URL: `https://scratch.morad.uk/auth/oidc/callback`
 - Response Type: `code`
 - Grant Types: `authorization_code`, `refresh_token`
+- Allowed scopes: include `offline_access` (VoidAuth's client default is `openid offline_access profile email groups`)
 - PostLogout URL: `https://scratch.morad.uk/`
+
+Scratchwall requests `offline_access` plus `prompt=consent` so VoidAuth issues a refresh token. Keep **Skip Consent** enabled so that consent prompt is completed automatically and no extra dialog appears. After deploying this, sign in once so the server can store a refresh token; older hour-long sessions cannot be repaired in place.
+
+If login fails with a missing-refresh-token error, add `offline_access` to the client's allowed scopes (or confirm Skip Consent is on). VoidAuth refresh tokens last 14 days and rotate while Scratchwall is used; open the app at least every couple of weeks to keep the grant alive.
 
 Put the generated client ID and secret in `.env`. Scratchwall validates the ID-token signature, issuer, audience, expiration and nonce; it then calls UserInfo and fails closed unless the configured group claim contains `admins` or `devs`.
 

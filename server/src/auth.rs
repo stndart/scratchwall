@@ -25,6 +25,9 @@ use time::Duration;
 use url::Url;
 use uuid::Uuid;
 
+pub const SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+pub const OIDC_SCOPES: &str = "openid profile email groups offline_access";
+
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: i64,
@@ -35,12 +38,14 @@ pub struct AuthUser {
 pub struct LoginQuery {
     mode: Option<String>,
     code_challenge: Option<String>,
+    silent: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct CallbackQuery {
-    code: String,
-    state: String,
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -203,6 +208,71 @@ fn random_token(bytes: usize) -> String {
     URL_SAFE_NO_PAD.encode(value)
 }
 
+pub fn login_is_silent(silent: Option<&str>) -> bool {
+    matches!(
+        silent.map(str::trim),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+pub fn oidc_prompt(silent: bool) -> &'static str {
+    if silent { "none" } else { "consent" }
+}
+
+pub fn silent_auth_failed(error: &str) -> bool {
+    matches!(
+        error,
+        "login_required" | "interaction_required" | "consent_required"
+    )
+}
+
+pub fn session_should_slide(now: i64, expires_at: i64) -> bool {
+    expires_at.saturating_sub(now) <= SESSION_TTL_SECS / 2
+}
+
+pub fn authorization_url(
+    issuer: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+    nonce: &str,
+    code_challenge: &str,
+    silent: bool,
+) -> Result<Url, AppError> {
+    let mut url =
+        Url::parse(&format!("{issuer}/auth")).map_err(|e| AppError::Internal(e.into()))?;
+    url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("scope", OIDC_SCOPES)
+        .append_pair("state", state)
+        .append_pair("nonce", nonce)
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("prompt", oidc_prompt(silent));
+    Ok(url)
+}
+
+fn require_refresh_token(token: &TokenResponse) -> Result<&str, AppError> {
+    token.refresh_token.as_deref().ok_or_else(|| {
+        tracing::error!("OIDC token response omitted refresh_token");
+        AppError::BadRequest(
+            "OIDC provider did not issue a refresh token. Add offline_access to the VoidAuth client scopes and keep Skip Consent enabled.".into(),
+        )
+    })
+}
+
+fn session_cookie(token: &str, secure: bool) -> Cookie<'static> {
+    Cookie::build(("scratchwall_session", token.to_owned()))
+        .path("/")
+        .http_only(true)
+        .secure(secure)
+        .same_site(SameSite::Lax)
+        .max_age(Duration::seconds(SESSION_TTL_SECS))
+        .build()
+}
+
 fn seal_credential(state: &AppState, value: &str) -> Result<String, AppError> {
     let cipher =
         Aes256Gcm::new_from_slice(&state.config.session_key).map_err(|_| AppError::Forbidden)?;
@@ -260,23 +330,27 @@ pub async fn login(
     let expires = Utc::now().timestamp() + 600;
     sqlx::query("INSERT INTO auth_flows(state_hash,nonce,oidc_verifier,mode,native_challenge,expires_at) VALUES(?,?,?,?,?,?)")
         .bind(token_hash(&state_value)).bind(&nonce).bind(seal_credential(&state, &verifier)?).bind(&mode).bind(query.code_challenge).bind(expires).execute(&state.db).await?;
+    let silent = login_is_silent(query.silent.as_deref());
     let callback = format!("{}/auth/oidc/callback", state.config.public_base_url);
-    let mut url = Url::parse(&format!("{}/auth", state.config.oidc_issuer))
-        .map_err(|e| AppError::Internal(e.into()))?;
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", &state.config.oidc_client_id)
-        .append_pair("redirect_uri", &callback)
-        .append_pair("scope", "openid profile email groups")
-        .append_pair("state", &state_value)
-        .append_pair("nonce", &nonce)
-        .append_pair("code_challenge", &pkce_challenge(&verifier))
-        .append_pair("code_challenge_method", "S256");
+    let url = authorization_url(
+        &state.config.oidc_issuer,
+        &state.config.oidc_client_id,
+        &callback,
+        &state_value,
+        &nonce,
+        &pkce_challenge(&verifier),
+        silent,
+    )?;
+    let secure = state.config.public_base_url.starts_with("https://");
     let cookie = Cookie::build(("scratchwall_login", state_value))
         .path("/auth/oidc/callback")
         .http_only(true)
-        .secure(state.config.public_base_url.starts_with("https://"))
-        .same_site(SameSite::Lax)
+        .secure(secure)
+        .same_site(if silent && secure {
+            SameSite::None
+        } else {
+            SameSite::Lax
+        })
         .max_age(Duration::minutes(10))
         .build();
     let mut response = Redirect::temporary(url.as_str()).into_response();
@@ -335,11 +409,25 @@ pub async fn callback(
     headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, AppError> {
-    if jar.get("scratchwall_login").map(Cookie::value) != Some(query.state.as_str()) {
+    if let Some(error) = query.error.as_deref() {
+        if silent_auth_failed(error) {
+            return Ok(Redirect::to("/?auth=required").into_response());
+        }
+        return Err(AppError::Forbidden);
+    }
+    let code = query
+        .code
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("missing code".into()))?;
+    let state_value = query
+        .state
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("missing state".into()))?;
+    if jar.get("scratchwall_login").map(Cookie::value) != Some(state_value) {
         return Err(AppError::Forbidden);
     }
     let row = sqlx::query("DELETE FROM auth_flows WHERE state_hash=? AND expires_at>? RETURNING nonce,oidc_verifier,mode,native_challenge")
-        .bind(token_hash(&query.state)).bind(Utc::now().timestamp()).fetch_optional(&state.db).await?.ok_or_else(|| AppError::BadRequest("login state expired or invalid".into()))?;
+        .bind(token_hash(state_value)).bind(Utc::now().timestamp()).fetch_optional(&state.db).await?.ok_or_else(|| AppError::BadRequest("login state expired or invalid".into()))?;
     let nonce: String = row.get("nonce");
     let verifier = open_credential(&state, row.get::<String, _>("oidc_verifier").as_str())?;
     let mode: String = row.get("mode");
@@ -354,7 +442,7 @@ pub async fn callback(
         )
         .form(&[
             ("grant_type", "authorization_code"),
-            ("code", query.code.as_str()),
+            ("code", code),
             ("redirect_uri", callback.as_str()),
             ("code_verifier", verifier.as_str()),
         ])
@@ -447,9 +535,10 @@ pub async fn callback(
     let user_id = db::ensure_user(&state.db, &state.config.oidc_issuer, &profile)
         .await
         .map_err(AppError::Internal)?;
+    let refresh = require_refresh_token(&token)?;
     sqlx::query("INSERT INTO oidc_credentials(user_id,access_token,refresh_token,expires_at,checked_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET access_token=excluded.access_token,refresh_token=excluded.refresh_token,expires_at=excluded.expires_at,checked_at=excluded.checked_at")
         .bind(user_id).bind(seal_credential(&state, &token.access_token)?)
-        .bind(token.refresh_token.map(|value| seal_credential(&state, &value)).transpose()?)
+        .bind(seal_credential(&state, refresh)?)
         .bind(Utc::now().timestamp() + token.expires_in.unwrap_or(300).clamp(0, 86400))
         .bind(Utc::now().timestamp()).execute(&state.db).await?;
 
@@ -472,13 +561,7 @@ pub async fn callback(
 
     let (session, expires_at) = create_session(&state, user_id).await?;
     let secure = state.config.public_base_url.starts_with("https://");
-    let cookie = Cookie::build(("scratchwall_session", session))
-        .path("/")
-        .http_only(true)
-        .secure(secure)
-        .same_site(SameSite::Lax)
-        .max_age(Duration::days(30))
-        .build();
+    let cookie = session_cookie(&session, secure);
     let mut response = Redirect::to("/").into_response();
     response
         .headers_mut()
@@ -489,7 +572,7 @@ pub async fn callback(
 
 async fn create_session(state: &AppState, user_id: i64) -> Result<(String, i64), AppError> {
     let token = random_token(32);
-    let expires = Utc::now().timestamp() + 30 * 24 * 60 * 60;
+    let expires = Utc::now().timestamp() + SESSION_TTL_SECS;
     sqlx::query(
         "INSERT INTO sessions(id,token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?,?)",
     )
@@ -593,23 +676,42 @@ pub async fn require_auth(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {
+    let using_bearer = request.headers().contains_key(header::AUTHORIZATION);
     let token = extract_token(&request).ok_or(AppError::Unauthorized)?;
-    if !request.headers().contains_key(header::AUTHORIZATION)
+    if !using_bearer
         && let Some(origin) = request.headers().get(header::ORIGIN)
         && origin.to_str().ok() != Some(state.config.public_base_url.as_str())
     {
         return Err(AppError::Forbidden);
     }
-    let user_id: Option<i64> =
-        sqlx::query_scalar("SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?")
+    let row =
+        sqlx::query("SELECT user_id, expires_at FROM sessions WHERE token_hash=? AND expires_at>?")
             .bind(token_hash(&token))
             .bind(Utc::now().timestamp())
             .fetch_optional(&state.db)
-            .await?;
-    let user_id = user_id.ok_or(AppError::Unauthorized)?;
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+    let user_id: i64 = row.get("user_id");
+    let expires_at: i64 = row.get("expires_at");
     renew_membership(&state, user_id).await?;
     request.extensions_mut().insert(AuthUser { user_id });
-    Ok(next.run(request).await)
+    let mut response = next.run(request).await;
+    let now = Utc::now().timestamp();
+    if session_should_slide(now, expires_at) {
+        sqlx::query("UPDATE sessions SET expires_at=? WHERE token_hash=?")
+            .bind(now + SESSION_TTL_SECS)
+            .bind(token_hash(&token))
+            .execute(&state.db)
+            .await?;
+        if !using_bearer {
+            let cookie =
+                session_cookie(&token, state.config.public_base_url.starts_with("https://"));
+            response
+                .headers_mut()
+                .append(header::SET_COOKIE, cookie.to_string().parse().unwrap());
+        }
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -700,5 +802,86 @@ mod tests {
         let second = seal_credential(&state, "credential").unwrap();
         assert_ne!(first, second);
         assert_eq!(open_credential(&state, &first).unwrap(), "credential");
+    }
+
+    #[test]
+    fn interactive_login_requests_offline_access_and_consent() {
+        let url = authorization_url(
+            "https://void.example/oidc",
+            "client",
+            "https://app.example/auth/oidc/callback",
+            "state",
+            "nonce",
+            "challenge",
+            false,
+        )
+        .unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            query.get("scope").unwrap(),
+            "openid profile email groups offline_access"
+        );
+        assert_eq!(query.get("prompt").unwrap(), "consent");
+        assert_eq!(query.get("response_type").unwrap(), "code");
+    }
+
+    #[test]
+    fn silent_login_uses_prompt_none() {
+        let url = authorization_url(
+            "https://void.example/oidc",
+            "client",
+            "https://app.example/auth/oidc/callback",
+            "state",
+            "nonce",
+            "challenge",
+            true,
+        )
+        .unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("prompt").unwrap(), "none");
+        assert!(
+            query
+                .get("scope")
+                .unwrap()
+                .split(' ')
+                .any(|scope| scope == "offline_access")
+        );
+        assert!(login_is_silent(Some("1")));
+        assert!(!login_is_silent(None));
+    }
+
+    #[test]
+    fn silent_callback_errors_redirect_home() {
+        assert!(silent_auth_failed("login_required"));
+        assert!(silent_auth_failed("interaction_required"));
+        assert!(silent_auth_failed("consent_required"));
+        assert!(!silent_auth_failed("access_denied"));
+    }
+
+    #[test]
+    fn sessions_slide_after_halfway() {
+        let ttl = SESSION_TTL_SECS;
+        assert!(!session_should_slide(0, ttl));
+        assert!(!session_should_slide(0, ttl / 2 + 1));
+        assert!(session_should_slide(0, ttl / 2));
+        assert!(session_should_slide(ttl - 60, ttl));
+    }
+
+    #[test]
+    fn missing_refresh_token_fails_closed() {
+        let token = TokenResponse {
+            access_token: "a".into(),
+            id_token: "i".into(),
+            refresh_token: None,
+            expires_in: Some(3600),
+        };
+        assert!(require_refresh_token(&token).is_err());
+        let token = TokenResponse {
+            access_token: "a".into(),
+            id_token: "i".into(),
+            refresh_token: Some("r".into()),
+            expires_in: Some(3600),
+        };
+        assert_eq!(require_refresh_token(&token).unwrap(), "r");
     }
 }

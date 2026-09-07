@@ -217,6 +217,10 @@ fn is_spa_shell(path: &str) -> bool {
     )
 }
 
+fn allows_same_origin_frame(path: &str) -> bool {
+    path == "/api/v1/auth/login" || path == "/auth/oidc/callback"
+}
+
 async fn security_headers(request: Request<Body>, next: middleware::Next) -> Response {
     let path = request.uri().path().to_string();
     let sensitive = path.starts_with("/api/") || path.starts_with("/auth/");
@@ -226,7 +230,14 @@ async fn security_headers(request: Request<Body>, next: middleware::Next) -> Res
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "x-frame-options",
+        HeaderValue::from_static(if allows_same_origin_frame(&path) {
+            "SAMEORIGIN"
+        } else {
+            "DENY"
+        }),
+    );
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     if sensitive {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -401,6 +412,14 @@ mod tests {
         }
         assert!(!is_spa_shell("/assets/index-abc.js"));
         assert!(!is_spa_shell("/api/v1/sync"));
+    }
+
+    #[test]
+    fn silent_login_and_callback_may_be_framed_by_the_app() {
+        assert!(allows_same_origin_frame("/api/v1/auth/login"));
+        assert!(allows_same_origin_frame("/auth/oidc/callback"));
+        assert!(!allows_same_origin_frame("/"));
+        assert!(!allows_same_origin_frame("/api/v1/sync"));
     }
 
     #[tokio::test]

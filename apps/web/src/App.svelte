@@ -23,7 +23,7 @@
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
-  import { compareMemoOrder, swipeAction } from './lib/memoActions';
+  import { compareMemoOrder, isTapGesture, swipeAction, swipeIgnoresTarget } from './lib/memoActions';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -46,6 +46,7 @@
   let sidebarOpen = false;
   let editing: Memo | undefined;
   let error = '';
+  let authExpired = false;
   let updateAvailable: { version: string; url: string } | undefined;
   let feed: HTMLDivElement;
   let fileInput: HTMLInputElement;
@@ -59,6 +60,8 @@
   let selectedMemoIds = new Set<string>();
   let movingMemoIds: string[] = [];
   let swipe: { memo: Memo; element: HTMLElement; startX: number; startY: number; x: number; y: number } | undefined;
+  let suppressAttachmentOpen = false;
+  let suppressAttachmentOpenTimer = 0;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
   $: visibleMemos = memos.filter((memo) =>
@@ -129,11 +132,15 @@
       await syncUntilCaughtUp();
       await refresh();
       reachable = true;
+      authExpired = false;
     } catch (value) {
       reachable = false;
-      error = value instanceof UnauthorizedError
-        ? value.message
-        : 'Server unavailable; changes remain safely on this device.';
+      if (value instanceof UnauthorizedError) {
+        error = value.message;
+        authExpired = true;
+      } else {
+        error = 'Server unavailable; changes remain safely on this device.';
+      }
     } finally {
       syncing = false;
     }
@@ -318,6 +325,11 @@
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
+  function openAlbumImage(attachment: Attachment) {
+    if (suppressAttachmentOpen) return;
+    void openAttachment(attachment);
+  }
+
   async function openAttachment(attachment: Attachment) {
     if (isNative()) {
       try {
@@ -370,7 +382,7 @@
   }
 
   function startSwipe(event: PointerEvent, memo: Memo) {
-    if (event.pointerType !== 'touch' || selecting || (event.target as Element).closest('button, a, input')) return;
+    if (event.pointerType !== 'touch' || selecting || swipeIgnoresTarget(event.target)) return;
     const element = event.currentTarget as HTMLElement;
     swipe = { memo, element, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY };
     element.setPointerCapture(event.pointerId);
@@ -395,7 +407,14 @@
     current.element.style.setProperty('--swipe-x', '0px');
     delete current.element.dataset.swipe;
     if (cancelled) return;
-    const action = swipeAction(current.x - current.startX, current.y - current.startY);
+    const deltaX = current.x - current.startX;
+    const deltaY = current.y - current.startY;
+    if (!isTapGesture(deltaX, deltaY)) {
+      suppressAttachmentOpen = true;
+      window.clearTimeout(suppressAttachmentOpenTimer);
+      suppressAttachmentOpenTimer = window.setTimeout(() => { suppressAttachmentOpen = false; }, 50);
+    }
+    const action = swipeAction(deltaX, deltaY);
     if (action === 'bump') void bumpMemos([current.memo.id]);
     if (action === 'delete') void removeMemo(current.memo);
   }
@@ -478,6 +497,7 @@
 
   async function signIn() {
     error = '';
+    authExpired = false;
     try { await login(); }
     catch (value) { error = value instanceof Error ? value.message : String(value); }
   }
@@ -530,14 +550,25 @@
       });
       await refresh();
       profile = await getProfile();
+      if (new URL(location.href).searchParams.get('auth') === 'required') {
+        authExpired = true;
+        error = 'Sign in required';
+        history.replaceState({}, '', `${location.pathname}${location.hash}`);
+      }
       try {
         if (localStorage.getItem('scratchwall.loggedOut')) throw new Error('Sign in to continue');
         const current = await me();
         if (profile && profile.subject !== current.subject) await clearLocalData();
         profile = current;
         await setProfile(current);
+        authExpired = false;
       } catch (value) {
-        if (online && !profile) error = value instanceof Error ? value.message : String(value);
+        if (value instanceof UnauthorizedError) {
+          authExpired = true;
+          error = value.message;
+        } else if (online && !profile) {
+          error = value instanceof Error ? value.message : String(value);
+        }
       }
       authChecked = true;
       if (profile) {
@@ -638,7 +669,13 @@
       {#if updateAvailable}
         <a class="update" href={updateAvailable.url} target="_blank" rel="noreferrer">Scratchwall {updateAvailable.version} is available</a>
       {/if}
-      {#if error}<button class="error-banner" onclick={() => error = ''}>{error}<span>×</span></button>{/if}
+      {#if error}
+        <div class="error-banner" role="status">
+          <span class="banner-text">{error}</span>
+          {#if authExpired}<button class="banner-sign-in" onclick={signIn}>Sign in again</button>{/if}
+          <button class="banner-dismiss" aria-label="Dismiss" onclick={() => { error = ''; }}>×</button>
+        </div>
+      {/if}
 
       {#if selecting}
         <div class="batch-bar" aria-label="Selected memo actions">
@@ -693,17 +730,17 @@
               {#if images.length}
                 <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length}>
                   {#if images.length === 1}
-                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image" onclick={() => openAttachment(images[0])}>
-                      <span class="file-preview"><img src={images[0].thumbnail} alt="" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image" onclick={() => openAlbumImage(images[0])}>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                   {:else}
-                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image hero" onclick={() => openAttachment(images[0])}>
-                      <span class="file-preview"><img src={images[0].thumbnail} alt="" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image hero" onclick={() => openAlbumImage(images[0])}>
+                      <span class="file-preview"><img src={images[0].thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                     <div class="album-rest">
                       {#each images.slice(1) as attachment (attachment.id)}
-                        <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment image" onclick={() => openAttachment(attachment)}>
-                          <span class="file-preview"><img src={attachment.thumbnail} alt="" />{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
+                        <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment image" onclick={() => openAlbumImage(attachment)}>
+                          <span class="file-preview"><img src={attachment.thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                         </button>
                       {/each}
                     </div>
