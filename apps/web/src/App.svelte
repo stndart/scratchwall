@@ -23,6 +23,7 @@
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
+  import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder, isTapGesture, swipeAction, swipeIgnoresTarget } from './lib/memoActions';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
@@ -787,7 +788,7 @@
           <div class="compose-row">
             <button class="attach" aria-label="Attach files" onclick={() => fileInput.click()}>＋</button>
             <input bind:this={fileInput} class="hidden" type="file" multiple onchange={(event) => handleFiles(event.currentTarget.files)} />
-            <textarea bind:value={body} onkeydown={handleComposerKey} rows="1" enterkeyhint="send" placeholder="Write or paste a memo…" aria-label="Memo text"></textarea>
+            <textarea bind:value={body} use:autosizeTextarea={body} onkeydown={handleComposerKey} rows="1" enterkeyhint="send" placeholder="Write or paste a memo…" aria-label="Memo text"></textarea>
             <button class="send" aria-label="Send memo" onclick={submitMemo}>↑</button>
           </div>
           <div class="tag-row">

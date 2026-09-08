@@ -88,7 +88,7 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 
 .composer { flex: 0 0 auto; width: min(800px, calc(100% - 36px)); margin: 0 auto max(18px, env(safe-area-inset-bottom)); padding: 9px; border: 1px solid var(--line); border-radius: 17px; background: #171a22ee; box-shadow: 0 15px 50px #0008; backdrop-filter: blur(18px); }
 .composer.editing { border-color: #514a87; }.compose-row { display: flex; align-items: flex-end; gap: 8px; }
-.compose-row textarea { flex: 1; max-height: 160px; padding: 9px 2px; resize: none; border: 0; outline: 0; background: transparent; color: white; }
+.compose-row textarea { flex: 1; min-width: 0; field-sizing: content; max-height: 160px; overflow-y: auto; padding: 9px 2px; resize: none; border: 0; outline: 0; background: transparent; color: white; }
 .attach, .send, .icon-button { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 12px; background: #252936; cursor: pointer; }.send { background: var(--accent); font-size: 22px; }
 .tag-row { display: flex; gap: 6px; padding: 5px 45px 0; overflow-x: auto; }.tag-row input { width: 82px; border: 0; outline: 0; background: transparent; color: white; font-size: 12px; }
 .queued-files, .tags.selected { display: flex; gap: 6px; padding: 4px 45px; overflow-x: auto; }.queued-files span { padding: 4px 8px; border-radius: 8px; background: #252936; font-size: 11px; white-space: nowrap; }.queued-files button { border: 0; background: none; color: var(--muted); cursor: pointer; }
