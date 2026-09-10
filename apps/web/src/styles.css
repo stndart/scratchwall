@@ -65,6 +65,7 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .memo footer button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; font-size: 17px; }
 .memo footer button:hover { background: #ffffff0c; color: #e8eaf2; }
 .memo footer time { margin-right: auto; }.sync-mark { color: #6fcda4; }
+.memo-space { flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-2); font-weight: 650; }
 .memo-actions { display: flex; align-items: center; gap: 2px; }
 .select-memo { position: absolute; z-index: 1; top: 10px; right: 10px; display: grid; place-items: center; width: 34px; height: 34px; border: 2px solid #6c7280; border-radius: 50%; background: #11141bdd; color: white; cursor: pointer; }
 .select-memo.selected { border-color: var(--accent); background: var(--accent); }

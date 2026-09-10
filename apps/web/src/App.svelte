@@ -72,6 +72,7 @@
     ? visibleMemos.slice(0, renderLimit)
     : visibleMemos.slice(Math.max(0, visibleMemos.length - renderLimit));
   $: allTags = [...new Set(memos.flatMap((memo) => memo.tags))].sort((a, b) => a.localeCompare(b));
+  $: spaceNames = new Map(spaces.map((space) => [space.id, space.name]));
 
   function operation(kind: PendingOperation['kind'], entityId: string, payload?: Space | Memo): PendingOperation {
     return { id: uuidv7(), kind, entityId, payload, createdAt: new Date().toISOString(), attempts: 0 };
@@ -760,6 +761,7 @@
               {/if}
             {/if}
             <footer>
+              {#if query}<span class="memo-space">{spaceNames.get(memo.spaceId) ?? 'Unknown space'}</span>{/if}
               <time datetime={memo.createdAt} title={memo.bumpedAt ? `Bumped ${new Date(memo.bumpedAt).toLocaleString()}` : undefined}>{new Date(memo.createdAt).toLocaleString()}</time>
               <span class="sync-mark" title={memo.syncState}>{memo.syncState === 'pending' ? '◌' : memo.syncState === 'error' ? '!' : '✓'}</span>
               <span class="memo-actions">
