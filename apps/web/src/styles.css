@@ -43,6 +43,8 @@ nav { flex: 1; padding: 8px; overflow: auto; }
 .workspace { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; height: 100%; }
 header { display: flex; flex-shrink: 0; align-items: center; gap: 18px; min-height: 72px; padding: 11px 22px; border-bottom: 1px solid var(--line); background: #0d0f14bb; backdrop-filter: blur(18px); z-index: 2; }
 header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
+.scope-toggle { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--accent-2); cursor: pointer; font: inherit; }
+.scope-toggle:hover { text-decoration: underline; }
 .search { display: flex; align-items: center; gap: 8px; width: min(360px, 44vw); margin-left: auto; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .search input { width: 100%; border: 0; outline: 0; background: transparent; color: white; }
 .select-toggle { padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; }

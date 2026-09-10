@@ -69,3 +69,15 @@ export function buildSearchDocuments(spaces: Space[], memos: Memo[], attachments
   }
   return memos.map((memo) => documentFrom(memo, spaceNames.get(memo.spaceId), attachmentNames.get(memo.id) ?? []));
 }
+
+export function isVisibleMemo(
+  memo: Pick<Memo, 'id' | 'spaceId'>,
+  query: string,
+  resultIds: Set<string>,
+  selectedSpace: string,
+  searchAllSpaces: boolean
+): boolean {
+  if (!query.trim()) return memo.spaceId === selectedSpace;
+  if (!resultIds.has(memo.id)) return false;
+  return searchAllSpaces || memo.spaceId === selectedSpace;
+}

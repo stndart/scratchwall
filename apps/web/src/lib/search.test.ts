@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchDocuments, parseSearchQuery, SearchIndex } from './search';
+import { buildSearchDocuments, isVisibleMemo, parseSearchQuery, SearchIndex } from './search';
 import type { Attachment, Memo, Space } from './types';
 
 const space: Space = {
@@ -60,5 +60,18 @@ describe('local substring search documents', () => {
     expect(index.search('#watchlater')).toEqual(['tagged']);
     expect(index.search('watchlater')).toEqual(['tagged', 'mention']);
     expect(index.search('#missing')).toEqual([]);
+  });
+
+  it('can keep search results inside the current space', () => {
+    const inbox = { id: 'inbox', spaceId: 'inbox' };
+    const other = { id: 'other', spaceId: 'other' };
+    const hits = new Set(['inbox', 'other']);
+    expect(isVisibleMemo(inbox, '', hits, 'inbox', true)).toBe(true);
+    expect(isVisibleMemo(other, '', hits, 'inbox', true)).toBe(false);
+    expect(isVisibleMemo(inbox, 'scratch', hits, 'inbox', true)).toBe(true);
+    expect(isVisibleMemo(other, 'scratch', hits, 'inbox', true)).toBe(true);
+    expect(isVisibleMemo(inbox, 'scratch', hits, 'inbox', false)).toBe(true);
+    expect(isVisibleMemo(other, 'scratch', hits, 'inbox', false)).toBe(false);
+    expect(isVisibleMemo(inbox, 'scratch', new Set(), 'inbox', true)).toBe(false);
   });
 });

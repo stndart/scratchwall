@@ -25,6 +25,7 @@
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder, isTapGesture, swipeAction, swipeIgnoresTarget } from './lib/memoActions';
+  import { isVisibleMemo } from './lib/search';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -37,6 +38,7 @@
   let explicitTags: string[] = [];
   let selectedFiles: File[] = [];
   let query = '';
+  let searchAllSpaces = true;
   let resultIds = new Set<string>();
   let renderLimit = 200;
   let searching = false;
@@ -65,9 +67,7 @@
   let suppressAttachmentOpenTimer = 0;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
-  $: visibleMemos = memos.filter((memo) =>
-    query.trim() ? resultIds.has(memo.id) : memo.spaceId === selectedSpace
-  ).sort(compareMemoOrder);
+  $: visibleMemos = memos.filter((memo) => isVisibleMemo(memo, query, resultIds, selectedSpace, searchAllSpaces)).sort(compareMemoOrder);
   $: renderedMemos = query.trim()
     ? visibleMemos.slice(0, renderLimit)
     : visibleMemos.slice(Math.max(0, visibleMemos.length - renderLimit));
@@ -656,14 +656,26 @@
         <button class="icon-button mobile" aria-label="Open menu" onclick={() => sidebarOpen = true}>☰</button>
         <div>
           <h1>{query ? 'Search' : activeSpace?.name ?? 'Scratchwall'}</h1>
-          <small>{query ? `${visibleMemos.length} matches across all spaces` : `${visibleMemos.length} memos`}</small>
+          <small>
+            {#if query}
+              {visibleMemos.length} matches
+              <button
+                type="button"
+                class="scope-toggle"
+                title={searchAllSpaces ? 'Search only this space' : 'Search all spaces'}
+                onclick={() => searchAllSpaces = !searchAllSpaces}
+              >{searchAllSpaces ? 'across all spaces' : `in ${activeSpace?.name ?? 'this space'}`}</button>
+            {:else}
+              {visibleMemos.length} memos
+            {/if}
+          </small>
         </div>
         <button class="select-toggle" class:active={selecting} onclick={() => selecting ? leaveSelection() : selecting = true}>
           {selecting ? 'Cancel' : 'Select'}
         </button>
         <label class="search">
           <span>⌕</span>
-          <input bind:value={query} oninput={() => renderLimit = 200} placeholder="Search everything" aria-label="Search everything" />
+          <input bind:value={query} oninput={() => renderLimit = 200} placeholder={searchAllSpaces ? 'Search everything' : `Search ${activeSpace?.name ?? 'this space'}`} aria-label={searchAllSpaces ? 'Search everything' : `Search ${activeSpace?.name ?? 'this space'}`} />
           {#if searching}<span class="tiny-spinner"></span>{/if}
         </label>
       </header>
@@ -761,7 +773,7 @@
               {/if}
             {/if}
             <footer>
-              {#if query}<span class="memo-space">{spaceNames.get(memo.spaceId) ?? 'Unknown space'}</span>{/if}
+              {#if query && searchAllSpaces}<span class="memo-space">{spaceNames.get(memo.spaceId) ?? 'Unknown space'}</span>{/if}
               <time datetime={memo.createdAt} title={memo.bumpedAt ? `Bumped ${new Date(memo.bumpedAt).toLocaleString()}` : undefined}>{new Date(memo.createdAt).toLocaleString()}</time>
               <span class="sync-mark" title={memo.syncState}>{memo.syncState === 'pending' ? '◌' : memo.syncState === 'error' ? '!' : '✓'}</span>
               <span class="memo-actions">
