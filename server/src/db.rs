@@ -192,6 +192,15 @@ CREATE TABLE IF NOT EXISTS telegram_bind_challenges (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_telegram_bind_challenge_per_user
   ON telegram_bind_challenges(telegram_user_id);
+CREATE TABLE IF NOT EXISTS link_previews (
+  url TEXT PRIMARY KEY,
+  title TEXT,
+  description TEXT,
+  site TEXT NOT NULL,
+  favicon TEXT,
+  fetched_at INTEGER NOT NULL,
+  ok INTEGER NOT NULL
+);
 "#).execute(pool).await?;
     add_auth_flow_return_path(pool).await?;
     Ok(())

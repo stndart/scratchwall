@@ -1,4 +1,4 @@
-import type { Attachment, PendingOperation, Profile, SyncRequest, SyncResponse } from './types';
+import type { Attachment, LinkPreview, PendingOperation, Profile, SyncRequest, SyncResponse } from './types';
 import { applyServerChanges, attachmentSource, cacheNativeStream, getCursor, pendingOperations, putAttachment, rejectOperation } from './repository';
 import { clearNativeToken, isNative, nativeToken, startNativeLogin } from './nativeAuth';
 
@@ -178,4 +178,10 @@ export function connectChanges(onChange: () => void): () => void {
   const socket = new WebSocket(`${protocol}//${base.host}/api/v1/changes`);
   socket.addEventListener('message', onChange);
   return () => socket.close();
+}
+
+export async function fetchLinkPreview(url: string): Promise<LinkPreview | null> {
+  const response = await request(`/api/v1/previews?url=${encodeURIComponent(url)}`);
+  if (response.status === 204) return null;
+  return response.json();
 }

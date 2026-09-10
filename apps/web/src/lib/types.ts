@@ -84,3 +84,11 @@ export interface SearchDocument {
   tags: string[];
   haystack: string;
 }
+
+export interface LinkPreview {
+  url: string;
+  site: string;
+  title?: string;
+  description?: string;
+  favicon?: string;
+}

@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod ingest;
 mod models;
+mod previews;
 mod sync;
 mod thumbnails;
 mod uploads;
@@ -317,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
             "/files/{id}",
             get(uploads::download).head(uploads::download),
         )
+        .route("/previews", get(previews::get_preview))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

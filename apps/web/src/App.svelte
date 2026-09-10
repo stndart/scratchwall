@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import type { Attachment, Memo, PendingOperation, Profile, Space } from './lib/types';
+  import type { Attachment, LinkPreview, Memo, PendingOperation, Profile, Space } from './lib/types';
   import { uuidv7 } from './lib/ids';
   import { mergeTags } from './lib/tags';
   import {
@@ -18,7 +18,7 @@
     putSpace,
     setProfile
   } from './lib/repository';
-  import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
+  import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, fetchLinkPreview, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
   import { attachmentStatusLabel, createThumbnail, fileExtension, formatBytes, isAttachmentCached, isVideoMime, isVisualPreview } from './lib/media';
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
@@ -26,6 +26,7 @@
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder, isTapGesture, swipeAction, swipeIgnoresTarget } from './lib/memoActions';
   import { isVisibleMemo } from './lib/search';
+  import { firstHttpUrl, isUrlOnlyBody, linkParts } from './lib/links';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -66,6 +67,11 @@
   let swipe: { memo: Memo; element: HTMLElement; startX: number; startY: number; x: number; y: number } | undefined;
   let suppressAttachmentOpen = false;
   let suppressAttachmentOpenTimer = 0;
+  let previewTick = 0;
+  const previewCache = new Map<string, LinkPreview | null>();
+  const previewQueued = new Set<string>();
+  let previewQueue: string[] = [];
+  let previewBusy = false;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
   $: visibleMemos = memos.filter((memo) => isVisibleMemo(memo, query, resultIds, selectedSpace, searchAllSpaces)).sort(compareMemoOrder);
@@ -74,6 +80,7 @@
     : visibleMemos.slice(Math.max(0, visibleMemos.length - renderLimit));
   $: allTags = [...new Set(memos.flatMap((memo) => memo.tags))].sort((a, b) => a.localeCompare(b));
   $: spaceNames = new Map(spaces.map((space) => [space.id, space.name]));
+  $: queueLinkPreviews(renderedMemos);
 
   function operation(kind: PendingOperation['kind'], entityId: string, payload?: Space | Memo): PendingOperation {
     return { id: uuidv7(), kind, entityId, payload, createdAt: new Date().toISOString(), attempts: 0 };
@@ -427,18 +434,48 @@
     if (action === 'delete') void removeMemo(current.memo);
   }
 
-  function linkParts(text: string): Array<{ value: string; href?: string }> {
-    const pattern = /https?:\/\/[^\s<]+/giu;
-    const result: Array<{ value: string; href?: string }> = [];
-    let cursor = 0;
-    for (const match of text.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      if (index > cursor) result.push({ value: text.slice(cursor, index) });
-      result.push({ value: match[0], href: match[0] });
-      cursor = index + match[0].length;
+  function queueLinkPreviews(memosToShow: Memo[]) {
+    if (!online || authExpired) return;
+    for (const memo of memosToShow) {
+      const url = firstHttpUrl(memo.body);
+      if (!url || previewCache.has(url) || previewQueued.has(url)) continue;
+      previewQueued.add(url);
+      previewQueue.push(url);
     }
-    if (cursor < text.length) result.push({ value: text.slice(cursor) });
-    return result;
+    void drainLinkPreviews();
+  }
+
+  async function drainLinkPreviews() {
+    if (previewBusy) return;
+    previewBusy = true;
+    while (previewQueue.length) {
+      const url = previewQueue.shift();
+      if (!url) continue;
+      try {
+        previewCache.set(url, await fetchLinkPreview(url));
+      } catch (error) {
+        if (error instanceof UnauthorizedError || (error instanceof Error && error.name === 'AbortError')) {
+          previewQueued.delete(url);
+          for (const pending of previewQueue) previewQueued.delete(pending);
+          previewQueue = [];
+          break;
+        }
+        previewCache.set(url, null);
+      }
+      previewTick += 1;
+    }
+    previewBusy = false;
+  }
+
+  function memoPreview(body: string): LinkPreview | null | undefined {
+    void previewTick;
+    const url = firstHttpUrl(body);
+    return url ? previewCache.get(url) : undefined;
+  }
+
+  function hideMemoBody(body: string, preview: LinkPreview | null | undefined): boolean {
+    const url = firstHttpUrl(body);
+    return Boolean(preview && url && isUrlOnlyBody(body, url));
   }
 
   async function clearFiles() {
@@ -722,6 +759,7 @@
           </button>
         {/if}
         {#each renderedMemos as memo (memo.id)}
+          {@const preview = previewTick >= 0 ? memoPreview(memo.body) : undefined}
           <div
             role="group"
             aria-label="Memo"
@@ -739,7 +777,17 @@
                 {selectedMemoIds.has(memo.id) ? '✓' : ''}
               </button>
             {/if}
-            {#if memo.body}<p>{#each linkParts(memo.body) as part}{#if part.href}<a href={part.href} target="_blank" rel="noreferrer">{part.value}</a>{:else}{part.value}{/if}{/each}</p>{/if}
+            {#if memo.body && !hideMemoBody(memo.body, preview)}<p>{#each linkParts(memo.body) as part}{#if part.href}<a href={part.href} target="_blank" rel="noreferrer">{part.value}</a>{:else}{part.value}{/if}{/each}</p>{/if}
+            {#if preview}
+              <a class="link-preview" href={preview.url} target="_blank" rel="noreferrer">
+                {#if preview.favicon}<img class="favicon" src={preview.favicon} alt="" />{/if}
+                <span class="copy">
+                  <span class="site">{preview.site}</span>
+                  <strong>{preview.title ?? preview.site}</strong>
+                  {#if preview.description}<span class="snippet">{preview.description}</span>{/if}
+                </span>
+              </a>
+            {/if}
             {#if memo.tags.length}
               <div class="tags">{#each memo.tags as tag}<button onclick={() => { query = `#${tag}`; renderLimit = 200; }}>#{tag}</button>{/each}</div>
             {/if}
@@ -748,7 +796,7 @@
               {@const images = items.filter(isAlbumImage)}
               {@const files = items.filter((attachment) => !isAlbumImage(attachment))}
               {#if images.length}
-                <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length}>
+                <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length && !preview}>
                   {#if images.length === 1}
                     <button class:remote={!isAttachmentCached(images[0].cacheState)} class:video={isVideoMime(images[0].mimeType)} class="attachment image" onclick={() => openAlbumImage(images[0])}>
                       <span class="file-preview"><img src={images[0].thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
