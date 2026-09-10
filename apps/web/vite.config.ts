@@ -6,7 +6,8 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
+      injectRegister: false,
       manifest: {
         name: 'Scratchwall',
         short_name: 'Scratchwall',
@@ -29,9 +30,7 @@ export default defineConfig({
           /^\/telegram\//
         ],
         runtimeCaching: [],
-        cleanupOutdatedCaches: true,
-        skipWaiting: true,
-        clientsClaim: true
+        cleanupOutdatedCaches: true
       }
     })
   ],

@@ -138,6 +138,8 @@ header h1 { margin: 0; font-size: 18px; } header small { color: var(--muted); }
 .error-banner .banner-sign-in { flex-shrink: 0; padding: 6px 10px; border: 0; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font: inherit; }
 .error-banner .banner-dismiss { flex-shrink: 0; border: 0; background: none; color: inherit; cursor: pointer; font-size: 16px; }
 .update { border-color: #46407a; background: #25213f; color: #c7c0ff; text-align: center; }
+.pwa-toast { position: fixed; z-index: 40; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px; max-width: min(360px, calc(100% - 32px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 16px 48px #0008; }
+.pwa-toast button { flex-shrink: 0; padding: 7px 12px; border: 0; border-radius: 9px; background: var(--accent); color: white; cursor: pointer; }
 .batch-bar { display: flex; flex-shrink: 0; align-items: center; gap: 6px; width: min(760px, calc(100% - 36px)); margin: 8px auto 0; overflow-x: auto; padding: 7px; border: 1px solid #4d4779; border-radius: 12px; background: #1d1b2c; }
 .batch-bar strong { margin: 0 5px; color: var(--accent-2); white-space: nowrap; font-size: 13px; }
 .batch-bar button { flex-shrink: 0; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); cursor: pointer; }

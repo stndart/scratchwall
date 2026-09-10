@@ -22,6 +22,7 @@
   import { attachmentStatusLabel, createThumbnail, fileExtension, formatBytes, isAttachmentCached, isVideoMime, isVisualPreview } from './lib/media';
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
+  import { registerWebUpdate } from './lib/pwa';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder, isTapGesture, swipeAction, swipeIgnoresTarget } from './lib/memoActions';
@@ -53,6 +54,8 @@
   let error = '';
   let authExpired = false;
   let updateAvailable: { version: string; url: string } | undefined;
+  let pwaNeedsRefresh = false;
+  let applyWebUpdate = () => location.reload();
   let feed: HTMLDivElement;
   let fileInput: HTMLInputElement;
   let dragDepth = 0;
@@ -574,6 +577,8 @@
     window.addEventListener('offline', onOffline);
     const onVisibility = () => { if (document.visibilityState === 'visible') void sync(); };
     document.addEventListener('visibilitychange', onVisibility);
+    const pwa = registerWebUpdate(() => { pwaNeedsRefresh = true; });
+    applyWebUpdate = pwa.apply;
     document.addEventListener('paste', handlePaste);
     // Native clients cannot attach their bearer token to a browser WebSocket.
     // A visible-only timer keeps all open clients inside the two-second convergence target.
@@ -637,6 +642,7 @@
       document.removeEventListener('visibilitychange', onVisibility);
       document.removeEventListener('paste', handlePaste);
       window.clearInterval(foregroundSync);
+      pwa.stop();
       removeDeepLink();
     };
   });
@@ -883,5 +889,12 @@
         </div>
       {/if}
     </section>
+  </div>
+{/if}
+
+{#if pwaNeedsRefresh}
+  <div class="pwa-toast" role="status">
+    <span>New version ready</span>
+    <button type="button" onclick={() => applyWebUpdate()}>Refresh</button>
   </div>
 {/if}
