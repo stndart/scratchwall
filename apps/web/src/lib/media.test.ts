@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fileExtension, isAttachmentCached } from './media';
+import { attachmentStatusLabel, fileExtension, isAttachmentCached } from './media';
 
 describe('fileExtension', () => {
   it('uses the last suffix in uppercase', () => {
@@ -23,5 +23,14 @@ describe('isAttachmentCached', () => {
     expect(isAttachmentCached('cached')).toBe(true);
     expect(isAttachmentCached('remote')).toBe(false);
     expect(isAttachmentCached('error')).toBe(false);
+  });
+});
+
+describe('attachmentStatusLabel', () => {
+  it('tells the user when a local file is still uploading', () => {
+    expect(attachmentStatusLabel('local', false)).toBe('Uploading…');
+    expect(attachmentStatusLabel('error', false)).toBe('Upload failed');
+    expect(attachmentStatusLabel('cached', true)).toBe('cached');
+    expect(attachmentStatusLabel('remote', true)).toBe('remote');
   });
 });

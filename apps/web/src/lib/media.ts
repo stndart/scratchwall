@@ -36,3 +36,9 @@ export function isAttachmentCached(cacheState: 'local' | 'cached' | 'remote' | '
   return cacheState === 'local' || cacheState === 'cached';
 }
 
+export function attachmentStatusLabel(cacheState: 'local' | 'cached' | 'remote' | 'error', remoteReady: boolean): string {
+  if (!remoteReady && cacheState === 'local') return 'Uploading…';
+  if (cacheState === 'error') return 'Upload failed';
+  return cacheState;
+}
+

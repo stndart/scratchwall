@@ -19,7 +19,7 @@
     setProfile
   } from './lib/repository';
   import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
-  import { createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
+  import { attachmentStatusLabel, createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
@@ -43,6 +43,7 @@
   let renderLimit = 200;
   let searching = false;
   let syncing = false;
+  let submitting = false;
   let online = navigator.onLine;
   let reachable = navigator.onLine;
   let authChecked = false;
@@ -189,47 +190,52 @@
   }
 
   async function submitMemo() {
-    if ((!body.trim() && selectedFiles.length === 0) || !selectedSpace) return;
+    if (submitting || (!body.trim() && selectedFiles.length === 0) || !selectedSpace) return;
     if (selectedFiles.some((file) => file.size > MAX_ATTACHMENT_BYTES)) {
       error = 'One or more files exceed the 2 GiB attachment limit.';
       return;
     }
+    submitting = true;
     const now = new Date().toISOString();
     const id = editing?.id ?? uuidv7();
     const attachmentIds = editing?.attachmentIds ? [...editing.attachmentIds] : [];
     try {
-      for (const file of selectedFiles) {
-        const attachment: Attachment = {
-          id: uuidv7(), memoId: id, filename: file.name, mimeType: file.type || 'application/octet-stream',
-          size: file.size, thumbnail: await createThumbnail(file), remoteReady: false,
-          cacheState: 'local', createdAt: now
-        };
-        await putAttachment(attachment, file);
-        attachmentIds.push(attachment.id);
+      try {
+        for (const file of selectedFiles) {
+          const attachment: Attachment = {
+            id: uuidv7(), memoId: id, filename: file.name, mimeType: file.type || 'application/octet-stream',
+            size: file.size, thumbnail: await createThumbnail(file), remoteReady: false,
+            cacheState: 'local', createdAt: now
+          };
+          await putAttachment(attachment, file);
+          attachmentIds.push(attachment.id);
+        }
+      } catch {
+        error = 'This device does not have enough local storage for the selected file.';
+        return;
       }
-    } catch {
-      error = 'This device does not have enough local storage for the selected file.';
-      return;
+      const memo: Memo = {
+        id,
+        spaceId: editing?.spaceId ?? selectedSpace,
+        body: body.trim(),
+        tags: mergeTags(body, explicitTags),
+        attachmentIds,
+        createdAt: editing?.createdAt ?? now,
+        bumpedAt: editing?.bumpedAt,
+        updatedAt: now,
+        syncState: 'pending'
+      };
+      await putMemo(memo, operation('upsert_memo', memo.id, memo));
+      body = '';
+      explicitTags = [];
+      selectedFiles = [];
+      editing = undefined;
+      if (fileInput) fileInput.value = '';
+      await refresh(true);
+      void sync();
+    } finally {
+      submitting = false;
     }
-    const memo: Memo = {
-      id,
-      spaceId: editing?.spaceId ?? selectedSpace,
-      body: body.trim(),
-      tags: mergeTags(body, explicitTags),
-      attachmentIds,
-      createdAt: editing?.createdAt ?? now,
-      bumpedAt: editing?.bumpedAt,
-      updatedAt: now,
-      syncState: 'pending'
-    };
-    await putMemo(memo, operation('upsert_memo', memo.id, memo));
-    body = '';
-    explicitTags = [];
-    selectedFiles = [];
-    editing = undefined;
-    if (fileInput) fileInput.value = '';
-    await refresh(true);
-    void sync();
   }
 
   function editMemo(memo: Memo) {
@@ -766,7 +772,7 @@
                   {#each files as attachment (attachment.id)}
                     <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment" onclick={() => openAttachment(attachment)}>
                       <span class="file-badge"><span class="ext">{fileExtension(attachment.filename)}</span>{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
-                      <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachment.cacheState}` : 'File is still syncing to this device'}</small></span>
+                      <span class="file-meta"><strong>{attachment.filename}</strong><small>{attachment.size ? `${attachment.mimeType} · ${formatBytes(attachment.size)} · ${attachmentStatusLabel(attachment.cacheState, attachment.remoteReady)}` : 'File is still syncing to this device'}</small></span>
                     </button>
                   {/each}
                 </div>
@@ -790,6 +796,7 @@
 
       {#if !query}
         <div class="composer" class:editing>
+          {#if submitting}<div class="editing-note">Saving memo…</div>{/if}
           {#if editing}<div class="editing-note">Editing memo <button onclick={() => { editing = undefined; body = ''; explicitTags = []; }}>Cancel</button></div>{/if}
           {#if selectedFiles.length}
             <div class="queued-files">
@@ -800,10 +807,10 @@
             <div class="tags selected">{#each explicitTags as tag}<button onclick={() => explicitTags = explicitTags.filter((value) => value !== tag)}>#{tag} ×</button>{/each}</div>
           {/if}
           <div class="compose-row">
-            <button class="attach" aria-label="Attach files" onclick={() => fileInput.click()}>＋</button>
+            <button class="attach" aria-label="Attach files" disabled={submitting} onclick={() => fileInput.click()}>＋</button>
             <input bind:this={fileInput} class="hidden" type="file" multiple onchange={(event) => handleFiles(event.currentTarget.files)} />
             <textarea bind:value={body} use:autosizeTextarea={body} onkeydown={handleComposerKey} rows="1" enterkeyhint="send" placeholder="Write or paste a memo…" aria-label="Memo text"></textarea>
-            <button class="send" aria-label="Send memo" onclick={submitMemo}>↑</button>
+            <button class="send" aria-label="Send memo" disabled={submitting} onclick={submitMemo}>{#if submitting}<span class="tiny-spinner" aria-hidden="true"></span>{:else}↑{/if}</button>
           </div>
           <div class="tag-row">
             <input bind:value={tagDraft} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); addTag(); } }} placeholder="Add tag" aria-label="Add tag" />
