@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchDocuments, SearchIndex } from './search';
+import { buildSearchDocuments, parseSearchQuery, SearchIndex } from './search';
 import type { Attachment, Memo, Space } from './types';
 
 const space: Space = {
@@ -7,9 +7,9 @@ const space: Space = {
   createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', syncState: 'synced'
 };
 
-function memo(id: string, body: string): Memo {
+function memo(id: string, body: string, tags = ['WatchLater']): Memo {
   return {
-    id, spaceId: space.id, body, tags: ['WatchLater'], attachmentIds: ['attachment'],
+    id, spaceId: space.id, body, tags, attachmentIds: ['attachment'],
     createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', syncState: 'synced'
   };
 }
@@ -46,5 +46,19 @@ describe('local substring search documents', () => {
     expect(index.documents.has('two')).toBe(false);
     index.update([{ ...space, name: 'New Space' }], [first], []);
     expect(index.search('new space')).toEqual(['one']);
+  });
+
+  it('treats a bare #tag query as an exact tag filter, not a body substring', () => {
+    const index = new SearchIndex();
+    index.update(
+      [space],
+      [memo('tagged', 'unrelated body'), memo('mention', 'please watchlater this', [])],
+      []
+    );
+    expect(parseSearchQuery('#WatchLater')).toEqual({ kind: 'tag', needle: 'watchlater' });
+    expect(index.search('#WatchLater')).toEqual(['tagged']);
+    expect(index.search('#watchlater')).toEqual(['tagged']);
+    expect(index.search('watchlater')).toEqual(['tagged', 'mention']);
+    expect(index.search('#missing')).toEqual([]);
   });
 });

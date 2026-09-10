@@ -1,5 +1,23 @@
 import type { Attachment, Memo, SearchDocument, Space } from './types';
-import { searchableText } from './tags';
+import { normalize, searchableText } from './tags';
+
+const TAG_QUERY = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)$/u;
+
+export function parseSearchQuery(query: string): { kind: 'text' | 'tag'; needle: string } {
+  const trimmed = query.trim();
+  const tag = trimmed.match(TAG_QUERY);
+  if (tag) return { kind: 'tag', needle: normalize(tag[1]) };
+  return { kind: 'text', needle: searchableText([trimmed]).trim() };
+}
+
+function documentFrom(memo: Memo, spaceName: string | undefined, filenames: string[]): SearchDocument {
+  return {
+    id: memo.id,
+    spaceId: memo.spaceId,
+    tags: memo.tags.map((tag) => normalize(tag)),
+    haystack: searchableText([memo.body, memo.tags.join(' '), spaceName, ...filenames])
+  };
+}
 
 export class SearchIndex {
   private signatures = new Map<string, string>();
@@ -16,11 +34,11 @@ export class SearchIndex {
     const alive = new Set<string>();
     for (const memo of memos) {
       alive.add(memo.id);
-      const fields = [memo.body, memo.tags.join(' '), names.get(memo.spaceId), ...(files.get(memo.id) ?? [])];
-      const signature = JSON.stringify([memo.spaceId, fields]);
+      const filenames = files.get(memo.id) ?? [];
+      const signature = JSON.stringify([memo.spaceId, memo.body, memo.tags, names.get(memo.spaceId), filenames]);
       if (this.signatures.get(memo.id) === signature) continue;
       this.signatures.set(memo.id, signature);
-      this.documents.set(memo.id, { id: memo.id, spaceId: memo.spaceId, haystack: searchableText(fields) });
+      this.documents.set(memo.id, documentFrom(memo, names.get(memo.spaceId), filenames));
     }
     for (const id of this.documents.keys()) {
       if (!alive.has(id)) { this.documents.delete(id); this.signatures.delete(id); }
@@ -28,9 +46,15 @@ export class SearchIndex {
   }
 
   search(query: string): string[] {
-    const needle = searchableText([query]).trim();
+    const parsed = parseSearchQuery(query);
+    if (!parsed.needle) return [];
     const ids: string[] = [];
-    for (const document of this.documents.values()) if (document.haystack.includes(needle)) ids.push(document.id);
+    for (const document of this.documents.values()) {
+      const hit = parsed.kind === 'tag'
+        ? document.tags.includes(parsed.needle)
+        : document.haystack.includes(parsed.needle);
+      if (hit) ids.push(document.id);
+    }
     return ids;
   }
 }
@@ -43,14 +67,5 @@ export function buildSearchDocuments(spaces: Space[], memos: Memo[], attachments
     values.push(attachment.filename);
     attachmentNames.set(attachment.memoId, values);
   }
-  return memos.map((memo) => ({
-    id: memo.id,
-    spaceId: memo.spaceId,
-    haystack: searchableText([
-      memo.body,
-      memo.tags.join(' '),
-      spaceNames.get(memo.spaceId),
-      ...(attachmentNames.get(memo.id) ?? [])
-    ])
-  }));
+  return memos.map((memo) => documentFrom(memo, spaceNames.get(memo.spaceId), attachmentNames.get(memo.id) ?? []));
 }

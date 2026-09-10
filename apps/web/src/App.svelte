@@ -722,7 +722,7 @@
             {/if}
             {#if memo.body}<p>{#each linkParts(memo.body) as part}{#if part.href}<a href={part.href} target="_blank" rel="noreferrer">{part.value}</a>{:else}{part.value}{/if}{/each}</p>{/if}
             {#if memo.tags.length}
-              <div class="tags">{#each memo.tags as tag}<button onclick={() => query = tag}>#{tag}</button>{/each}</div>
+              <div class="tags">{#each memo.tags as tag}<button onclick={() => { query = `#${tag}`; renderLimit = 200; }}>#{tag}</button>{/each}</div>
             {/if}
             {#if memo.attachmentIds.length}
               {@const items = attachmentsFor(memo)}

@@ -81,5 +81,6 @@ export interface Profile {
 export interface SearchDocument {
   id: string;
   spaceId: string;
+  tags: string[];
   haystack: string;
 }
