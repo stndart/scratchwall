@@ -5,6 +5,7 @@ mod error;
 mod ingest;
 mod models;
 mod sync;
+mod thumbnails;
 mod uploads;
 
 use auth::AuthUser;
@@ -385,10 +386,11 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::from_fn(security_headers))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     tracing::info!(address = %config.listen_addr, "Scratchwall listening");
+    tokio::spawn(thumbnails::backfill_missing_video_posters(state));
     axum::serve(listener, app).await?;
     Ok(())
 }

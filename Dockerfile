@@ -14,7 +14,7 @@ COPY server/src ./server/src
 RUN cargo build --manifest-path server/Cargo.toml --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=server /src/server/target/release/scratchwall-server /usr/local/bin/scratchwall-server
 COPY --from=web /src/apps/web/dist /app/web
 ENV LISTEN_ADDR=0.0.0.0:8080 DATA_DIR=/data WEB_DIR=/app/web

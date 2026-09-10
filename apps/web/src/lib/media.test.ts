@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attachmentStatusLabel, fileExtension, isAttachmentCached } from './media';
+import { attachmentStatusLabel, fileExtension, isAttachmentCached, isVideoMime, isVisualPreview } from './media';
 
 describe('fileExtension', () => {
   it('uses the last suffix in uppercase', () => {
@@ -32,5 +32,16 @@ describe('attachmentStatusLabel', () => {
     expect(attachmentStatusLabel('error', false)).toBe('Upload failed');
     expect(attachmentStatusLabel('cached', true)).toBe('cached');
     expect(attachmentStatusLabel('remote', true)).toBe('remote');
+  });
+});
+
+describe('isVisualPreview', () => {
+  it('shows image and video posters, but not file badges without a still', () => {
+    expect(isVisualPreview({ mimeType: 'image/jpeg', thumbnail: 'data:image/jpeg;base64,x' })).toBe(true);
+    expect(isVisualPreview({ mimeType: 'video/mp4', thumbnail: 'data:image/jpeg;base64,x' })).toBe(true);
+    expect(isVideoMime('application/mp4')).toBe(true);
+    expect(isVisualPreview({ mimeType: 'video/mp4' })).toBe(false);
+    expect(isVisualPreview({ mimeType: 'application/pdf', thumbnail: 'data:image/jpeg;base64,x' })).toBe(false);
+    expect(isVisualPreview({ mimeType: 'image/png' })).toBe(false);
   });
 });

@@ -19,7 +19,7 @@
     setProfile
   } from './lib/repository';
   import { apiOrigin, cancelRequests, connectChanges, downloadAttachment, downloadNativeAttachment, login, logout, me, syncUntilCaughtUp, UnauthorizedError, uploadPendingAttachments } from './lib/api';
-  import { attachmentStatusLabel, createThumbnail, fileExtension, formatBytes, isAttachmentCached } from './lib/media';
+  import { attachmentStatusLabel, createThumbnail, fileExtension, formatBytes, isAttachmentCached, isVideoMime, isVisualPreview } from './lib/media';
   import { captureAnchor, isNearBottom, prependScrollDelta, restoreAnchor } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
@@ -317,7 +317,7 @@
   }
 
   function isAlbumImage(attachment: Attachment) {
-    return attachment.mimeType.startsWith('image/') && Boolean(attachment.thumbnail);
+    return isVisualPreview(attachment);
   }
 
   function downloadBlob(blob: Blob, filename: string, preview = false) {
@@ -359,7 +359,7 @@
         return;
       }
     }
-    downloadBlob(blob, attachment.filename, attachment.mimeType.startsWith('image/'));
+    downloadBlob(blob, attachment.filename, attachment.mimeType.startsWith('image/') || isVideoMime(attachment.mimeType));
   }
 
   async function downloadFiles(ids: Iterable<string>) {
@@ -750,16 +750,16 @@
               {#if images.length}
                 <div class="album" class:album-single={images.length === 1} class:album-multi={images.length > 1} class:bleed-top={!memo.body && !memo.tags.length}>
                   {#if images.length === 1}
-                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image" onclick={() => openAlbumImage(images[0])}>
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class:video={isVideoMime(images[0].mimeType)} class="attachment image" onclick={() => openAlbumImage(images[0])}>
                       <span class="file-preview"><img src={images[0].thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                   {:else}
-                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class="attachment image hero" onclick={() => openAlbumImage(images[0])}>
+                    <button class:remote={!isAttachmentCached(images[0].cacheState)} class:video={isVideoMime(images[0].mimeType)} class="attachment image hero" onclick={() => openAlbumImage(images[0])}>
                       <span class="file-preview"><img src={images[0].thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(images[0].cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                     </button>
                     <div class="album-rest">
                       {#each images.slice(1) as attachment (attachment.id)}
-                        <button class:remote={!isAttachmentCached(attachment.cacheState)} class="attachment image" onclick={() => openAlbumImage(attachment)}>
+                        <button class:remote={!isAttachmentCached(attachment.cacheState)} class:video={isVideoMime(attachment.mimeType)} class="attachment image" onclick={() => openAlbumImage(attachment)}>
                           <span class="file-preview"><img src={attachment.thumbnail} alt="" draggable="false" />{#if !isAttachmentCached(attachment.cacheState)}<span class="dl-mark" aria-hidden="true">↓</span>{/if}</span>
                         </button>
                       {/each}

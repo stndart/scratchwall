@@ -2,7 +2,7 @@ use crate::{
     AppState, ChangeNotice, auth,
     error::AppError,
     models::{Attachment, Memo, Space},
-    sync,
+    sync, thumbnails,
 };
 use axum::{
     Json,
@@ -10,18 +10,13 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
-
-const THUMBNAIL_MAX_EDGE: u32 = 960;
-const THUMBNAIL_MAX_BYTES: usize = 512 * 1024;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,9 +404,7 @@ async fn stage_file(
     let is_image = mime_type.starts_with("image/");
     let thumbnail = if is_image {
         let bytes = tokio::fs::read(&temp_path).await.ok();
-        bytes
-            .as_deref()
-            .and_then(|data| thumbnail_data_url(data, true))
+        bytes.as_deref().and_then(thumbnails::image_data_url)
     } else {
         None
     };
@@ -438,31 +431,6 @@ fn safe_filename(name: &str) -> String {
     } else {
         cleaned
     }
-}
-
-fn thumbnail_data_url(bytes: &[u8], is_image: bool) -> Option<String> {
-    if !is_image {
-        return None;
-    }
-    let decoded = image::load_from_memory(bytes).ok()?;
-    let thumb = decoded.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE);
-    let rgb = thumb.to_rgb8();
-    let mut encoded = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 76)
-        .write_image(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .ok()?;
-    if encoded.is_empty() || encoded.len() > THUMBNAIL_MAX_BYTES {
-        return None;
-    }
-    Some(format!(
-        "data:image/jpeg;base64,{}",
-        STANDARD.encode(encoded)
-    ))
 }
 
 fn starts_with_ignore_ascii(value: &str, prefix: &str) -> bool {
@@ -575,6 +543,9 @@ async fn commit_ingest_inner(
             .await?
             .sync_all()
             .await?;
+        let mut file = file;
+        file.thumbnail =
+            thumbnails::ensure_for_file(&file.mime_type, file.thumbnail.take(), &blob_path).await;
         prepared.push((attachment_id, blob_path, file));
     }
 
@@ -788,6 +759,7 @@ mod tests {
         extract::DefaultBodyLimit,
         routing::{get, post},
     };
+    use image::ImageEncoder;
     use std::sync::Arc;
 
     fn tiny_png() -> Vec<u8> {
@@ -998,9 +970,9 @@ mod tests {
 
     #[test]
     fn png_thumbnail_is_a_jpeg_data_url() {
-        let thumb = thumbnail_data_url(&tiny_png(), true).unwrap();
+        let thumb = crate::thumbnails::image_data_url(&tiny_png()).unwrap();
         assert!(thumb.starts_with("data:image/jpeg;base64,"));
-        assert!(thumb.len() < THUMBNAIL_MAX_BYTES);
+        assert!(thumb.len() < crate::thumbnails::THUMBNAIL_MAX_BYTES);
     }
 
     #[tokio::test]

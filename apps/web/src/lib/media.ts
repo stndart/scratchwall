@@ -32,6 +32,17 @@ export function fileExtension(filename: string): string {
   return ext ? ext.slice(0, 5).toUpperCase() : 'FILE';
 }
 
+export function isVideoMime(mimeType: string): boolean {
+  const mime = mimeType.trim().toLowerCase();
+  return mime.startsWith('video/') || mime === 'application/mp4';
+}
+
+export function isVisualPreview(attachment: { mimeType: string; thumbnail?: string }): boolean {
+  return Boolean(attachment.thumbnail) && (
+    attachment.mimeType.startsWith('image/') || isVideoMime(attachment.mimeType)
+  );
+}
+
 export function isAttachmentCached(cacheState: 'local' | 'cached' | 'remote' | 'error'): boolean {
   return cacheState === 'local' || cacheState === 'cached';
 }

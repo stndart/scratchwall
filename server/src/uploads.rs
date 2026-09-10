@@ -295,13 +295,16 @@ pub async fn complete(
         .await?
         .sync_all()
         .await?;
+    let mime_type: String = row.get("mime_type");
+    let thumbnail =
+        crate::thumbnails::ensure_for_file(&mime_type, row.get("thumbnail"), &blob_path).await;
     let attachment = Attachment {
         id: id.clone(),
         memo_id: row.get("memo_id"),
         filename: row.get("filename"),
-        mime_type: row.get("mime_type"),
+        mime_type,
         size,
-        thumbnail: row.get("thumbnail"),
+        thumbnail,
         remote_ready: true,
         cache_state: "remote".into(),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -683,6 +686,92 @@ mod tests {
                 .unwrap();
         assert_eq!(count, 0);
     }
+
+    #[tokio::test]
+    async fn completing_a_video_upload_stores_a_jpeg_poster_alongside() {
+        if !tokio::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let (directory, state, user_id, memo_id) = fixture().await;
+        let clip = directory.path().join("clip.mp4");
+        let status = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=80x60:d=1",
+                "-pix_fmt",
+                "yuv420p",
+                clip.to_str().unwrap(),
+            ])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        let bytes = tokio::fs::read(&clip).await.unwrap();
+        let id = Uuid::now_v7().to_string();
+        let _ = create(
+            Extension(AuthUser { user_id }),
+            State(state.clone()),
+            Json(CreateUpload {
+                id: id.clone(),
+                memo_id,
+                filename: "clip.mp4".into(),
+                mime_type: "video/mp4".into(),
+                size: bytes.len() as u64,
+                thumbnail: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let put = Request::builder()
+            .header("upload-offset", "0")
+            .body(Body::from(bytes))
+            .unwrap();
+        let _ = append(
+            Extension(AuthUser { user_id }),
+            State(state.clone()),
+            Path(id.clone()),
+            put,
+        )
+        .await
+        .unwrap();
+        let attachment = complete(
+            Extension(AuthUser { user_id }),
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(
+            attachment
+                .thumbnail
+                .as_deref()
+                .is_some_and(|value| value.starts_with("data:image/jpeg;base64,"))
+        );
+        let storage_key: String =
+            sqlx::query_scalar("SELECT storage_key FROM attachments WHERE user_id=? AND id=?")
+                .bind(user_id)
+                .bind(&id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert!(crate::thumbnails::poster_path(std::path::Path::new(&storage_key)).is_file());
+    }
+
     #[test]
     fn parses_byte_ranges() {
         assert_eq!(
