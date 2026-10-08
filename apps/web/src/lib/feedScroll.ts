@@ -24,5 +24,7 @@ export function captureAnchor(feed: HTMLElement): { id: string; offset: number }
 export function restoreAnchor(feed: HTMLElement, anchor: { id: string; offset: number }) {
   const memo = feed.querySelector<HTMLElement>(`[data-memo-id="${CSS.escape(anchor.id)}"]`);
   if (!memo) return;
-  feed.scrollTop += memo.getBoundingClientRect().top - feed.getBoundingClientRect().top - anchor.offset;
+  const delta = memo.getBoundingClientRect().top - feed.getBoundingClientRect().top - anchor.offset;
+  // Even assigning the same position can interrupt an in-progress native scroll.
+  if (delta !== 0) feed.scrollTop += delta;
 }

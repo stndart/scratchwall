@@ -246,7 +246,7 @@ async fn security_headers(request: Request<Body>, next: middleware::Next) -> Res
     if sensitive {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     } else {
-        headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; connect-src 'self' https://scratch.morad.uk wss://scratch.morad.uk; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
+        headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; connect-src 'self' https://scratch.morad.uk wss://scratch.morad.uk; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
         if is_spa_shell(&path) {
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         }
@@ -495,6 +495,10 @@ mod tests {
             shell.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-cache"
         );
+        let policy = shell.headers().get("content-security-policy").unwrap().to_str().unwrap();
+        assert!(policy.contains("media-src 'self' blob:;"));
+        assert!(policy.contains("script-src 'self';"));
+        assert!(policy.contains("object-src 'none';"));
         let asset = client
             .get(format!("http://{addr}/assets/app.js"))
             .send()

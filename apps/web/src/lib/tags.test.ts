@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { mergeTags, parseTags, searchableText } from './tags';
+import { normalizeTags, searchableText } from './tags';
 
 describe('tags', () => {
-  it('parses unicode tags and ignores URL fragments', () => {
-    expect(parseTags('hello #важное and #dev-notes https://x.test/#no')).toEqual(['важное', 'dev-notes']);
+  it('cleans explicitly entered tags and keeps Unicode names', () => {
+    expect(normalizeTags(['#важное', ' dev-notes ', '', '#'])).toEqual(['важное', 'dev-notes']);
   });
 
   it('deduplicates tags case-insensitively', () => {
-    expect(mergeTags('#Ideas', ['ideas', 'Later'])).toEqual(['Ideas', 'Later']);
+    expect(normalizeTags(['#Ideas', 'ideas', 'Later'])).toEqual(['Ideas', 'Later']);
   });
 
   it('keeps complete URLs substring searchable', () => {

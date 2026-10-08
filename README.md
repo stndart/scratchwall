@@ -29,6 +29,23 @@ The web app is then available on `http://127.0.0.1:8080`. A real VoidAuth client
 
 For hot reload, run the server and `pnpm dev` in separate terminals. Vite proxies backend routes to port 8080.
 
+## Web and PWA interface
+
+The web app uses a responsive workspace with a spaces drawer on mobile, light/dark/system appearance, attachment previews, and an in-app image/video viewer. Install from the browser menu (or Share → Add to Home Screen on iOS).
+
+- **Ctrl/Cmd+K** focuses search; **N** focuses the composer when you aren't typing.
+- **Enter** saves a memo; **Shift+Enter** inserts a new line. Change this in Settings → Writing on each device; **Ctrl/Cmd+Enter** always saves.
+- **Tab** reaches every action; **↑/↓** moves between focused spaces or memo cards.
+- **Escape** closes dialogs or cancels search, selection, or editing. **?** opens shortcut help.
+
+Tag suggestions come from the current space. Use **Add a tag** to label memos; hashtags in memo text stay plain text.
+
+Memos support a small set of formatting: `**bold**`, `*italics*`, inline code in single backticks, and code snippets between triple backticks. Add a language after the opening fence (for example, `js`, `python`, `sql`, or `html`) for syntax coloring, or omit it for automatic detection. Code blocks preserve spacing and scroll horizontally for long lines. Use `text` for an uncolored block; unknown languages also display as plain code. Headings, lists, tables, and HTML stay literal text. Escape a formatting character with a backslash to keep it literal.
+
+Drafts stay separate per space while the app is open, and editing a saved memo preserves your unfinished draft. Save drafts before reloading; the PWA update button stays disabled while any space has a draft.
+
+Run `pnpm --filter @scratchwall/web test` for web regression tests and `pnpm check` / `pnpm build` for type and production checks.
+
 ## VoidAuth client
 
 Create one OIDC app with these exact values:

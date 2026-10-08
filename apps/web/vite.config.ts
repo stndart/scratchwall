@@ -8,17 +8,37 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       injectRegister: false,
+      includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Scratchwall',
         short_name: 'Scratchwall',
         description: 'A fast, local-first wall of memos.',
-        theme_color: '#101218',
-        background_color: '#101218',
+        theme_color: '#42664a',
+        background_color: '#fafbf9',
         display: 'standalone',
         start_url: '/',
+        scope: '/',
+        id: '/',
         icons: [
-          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
-        ]
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/icon-maskable.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
+        ],
       },
       workbox: {
         navigateFallback: '/index.html',
@@ -27,12 +47,12 @@ export default defineConfig({
           /^\/auth\//,
           /^\/downloads\//,
           /^\/healthz$/,
-          /^\/telegram\//
+          /^\/telegram\//,
         ],
         runtimeCaching: [],
-        cleanupOutdatedCaches: true
-      }
-    })
+        cleanupOutdatedCaches: true,
+      },
+    }),
   ],
   server: {
     port: 5173,
@@ -41,8 +61,8 @@ export default defineConfig({
       '/auth': 'http://127.0.0.1:8080',
       '/telegram': 'http://127.0.0.1:8080',
       '/downloads': 'http://127.0.0.1:8080',
-      '/healthz': 'http://127.0.0.1:8080'
-    }
+      '/healthz': 'http://127.0.0.1:8080',
+    },
   },
-  build: { target: 'es2022' }
+  build: { target: 'es2022' },
 });
