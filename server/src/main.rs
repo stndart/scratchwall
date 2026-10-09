@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod error;
 mod ingest;
+mod integrations;
 mod models;
 mod previews;
 mod sync;
@@ -246,7 +247,7 @@ async fn security_headers(request: Request<Body>, next: middleware::Next) -> Res
     if sensitive {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     } else {
-        headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; connect-src 'self' https://scratch.morad.uk wss://scratch.morad.uk; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
+        headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"));
         if is_spa_shell(&path) {
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         }
@@ -287,7 +288,9 @@ async fn listen_for_changes(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "scratchwall=info,tower_http=info".into()),
@@ -306,7 +309,27 @@ async fn main() -> anyhow::Result<()> {
         changes,
     };
 
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("integration-token") {
+        return integrations::provision_cli(&state, &args).await;
+    }
+    anyhow::ensure!(args.is_empty(), "Unknown command");
+
+    let agent_routes = Router::new()
+        .route("/api/v1/agent/context", get(integrations::context))
+        .route("/api/v1/agent/memos", get(integrations::memos))
+        .route("/api/v1/agent/memos/{id}", get(integrations::memo))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            integrations::require_token,
+        ));
+
     let protected = Router::new()
+        .route(
+            "/integrations",
+            get(integrations::list).post(integrations::create),
+        )
+        .route("/integrations/{id}/revoke", post(integrations::revoke))
         .route("/auth/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
         .route("/sync", post(sync::sync))
@@ -380,6 +403,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/downloads", get(downloads_page))
         .route("/downloads/", get(downloads_page))
         .route("/downloads/{name}", get(download_artifact))
+        .merge(agent_routes)
         .merge(ingest_routes)
         .merge(ingest_bind_routes)
         .nest("/api/v1", protected)
@@ -495,7 +519,12 @@ mod tests {
             shell.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-cache"
         );
-        let policy = shell.headers().get("content-security-policy").unwrap().to_str().unwrap();
+        let policy = shell
+            .headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(policy.contains("media-src 'self' blob:;"));
         assert!(policy.contains("script-src 'self';"));
         assert!(policy.contains("object-src 'none';"));

@@ -7,6 +7,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $root
+# Load private native build settings (process environment takes precedence).
+$envFile = Join-Path $root '.env'
+if (Test-Path -LiteralPath $envFile) {
+  foreach ($line in Get-Content -LiteralPath $envFile) {
+    if ($line -match '^(VITE_API_BASE|NATIVE_IDENTIFIER)=(.*)$') {
+      if (-not [Environment]::GetEnvironmentVariable($Matches[1])) {
+        [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2].Trim().Trim('"').Trim("'"))
+      }
+    }
+  }
+}
+node scripts/native-config.mjs
+if ($LASTEXITCODE -ne 0) { throw 'Native configuration failed' }
 
 $buildWindows = $Windows -or (-not ($Windows -or $Android -or $Linux))
 $buildAndroid = $Android -or (-not ($Windows -or $Android -or $Linux))
@@ -60,7 +73,7 @@ function Initialize-AndroidEnv {
     if ($ndk) { $env:NDK_HOME = $ndk.FullName }
   }
   if (-not $env:JAVA_HOME) {
-    $javaCandidates = @('G:\Program Files\Java\jdk-21')
+    $javaCandidates = @()
     if ($env:ProgramFiles) { $javaCandidates += (Join-Path $env:ProgramFiles 'Java\jdk-21') }
     foreach ($candidate in $javaCandidates) {
       if (Test-Path -LiteralPath $candidate) { $env:JAVA_HOME = $candidate; break }
@@ -78,7 +91,7 @@ function Initialize-AndroidEnv {
 
 if ($buildWindows) {
   Write-Host '==> Windows NSIS + portable EXE'
-  Invoke-Pnpm -PnpmArgs @('--dir', 'apps/web', 'tauri', 'build', '--bundles', 'nsis')
+  Invoke-Pnpm -PnpmArgs @('--dir', 'apps/web', 'tauri', 'build', '--config', 'src-tauri/tauri.local.json', '--bundles', 'nsis')
   Copy-BuiltFile -Source (Join-Path $root 'apps\web\src-tauri\target\release\scratchwall.exe') -Name 'scratchwall.exe'
   Copy-BuiltFile -Source (Join-Path $root "apps\web\src-tauri\target\release\bundle\nsis\Scratchwall_${version}_x64-setup.exe") -Name "Scratchwall_${version}_x64-setup.exe"
 }
@@ -86,7 +99,7 @@ if ($buildWindows) {
 if ($buildAndroid) {
   Write-Host '==> Android universal APK'
   Initialize-AndroidEnv
-  Invoke-Pnpm -PnpmArgs @('--dir', 'apps/web', 'tauri', 'android', 'build', '--apk', '--target', 'aarch64', 'armv7', 'i686', 'x86_64')
+  Invoke-Pnpm -PnpmArgs @('--dir', 'apps/web', 'tauri', 'android', 'build', '--config', 'src-tauri/tauri.local.json', '--apk', '--target', 'aarch64', 'armv7', 'i686', 'x86_64')
   $apkRoot = Join-Path $root 'apps\web\src-tauri\gen\android\app\build\outputs\apk'
   $apk = Get-ChildItem -LiteralPath $apkRoot -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match 'universal' -and $_.Name -match 'release' -and $_.Name -notmatch 'unsigned' } |
@@ -105,7 +118,7 @@ if ($buildAndroid) {
 if ($buildLinux) {
   Write-Host '==> Linux ELF + AppImage (Ubuntu 22.04)'
   docker rm -f scratchwall-linux-artifacts 2>$null | Out-Null
-  docker build -f build/linux.Dockerfile -t scratchwall-linux-builder .
+  docker build --build-arg "VITE_API_BASE=$env:VITE_API_BASE" --build-arg "NATIVE_IDENTIFIER=$env:NATIVE_IDENTIFIER" -f build/linux.Dockerfile -t scratchwall-linux-builder .
   if ($LASTEXITCODE -ne 0) { throw "Linux image build failed ($LASTEXITCODE)" }
   docker create --name scratchwall-linux-artifacts scratchwall-linux-builder | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "docker create failed ($LASTEXITCODE)" }
@@ -149,4 +162,4 @@ if ($missing) {
 
 $published = $catalog.Count - $missing.Count
 Write-Host "Published $published artifacts to artifacts\ and data\downloads\"
-Write-Host 'scratch.morad.uk will serve them from /downloads/ (data volume is bind-mounted).'
+Write-Host 'Your Scratchwall server will serve them from /downloads/ (data volume is bind-mounted).'

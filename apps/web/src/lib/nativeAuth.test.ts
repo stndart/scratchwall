@@ -8,7 +8,7 @@ describe('nativeCallbackCode', () => {
   });
 
   it('ignores unrelated schemes and paths', () => {
-    expect(nativeCallbackCode('https://scratch.morad.uk/auth/callback?code=abc')).toBeUndefined();
+    expect(nativeCallbackCode('https://scratchwall.example.com/auth/callback?code=abc')).toBeUndefined();
     expect(nativeCallbackCode('scratchwall://auth/other?code=abc')).toBeUndefined();
   });
 });

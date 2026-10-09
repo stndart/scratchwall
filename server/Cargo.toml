@@ -12,6 +12,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 hex = "0.4"
+dotenvy = "0.15"
 http-body-util = "0.1"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 jsonwebtoken = "9.3"

@@ -7,6 +7,8 @@ import { tick } from 'svelte';
 import MediaPreview from './components/MediaPreview.svelte';
 import { getAttachment } from './lib/repository';
 import { downloadAttachment } from './lib/api';
+import { SearchIndex } from './lib/search';
+import { currentVersion } from './lib/changelog';
 
 const state = vi.hoisted(() => ({
   memos: [] as Memo[],
@@ -149,8 +151,16 @@ beforeEach(() => {
   vi.stubGlobal(
     'Worker',
     class {
-      onmessage: unknown;
-      postMessage() {}
+      index = new SearchIndex();
+      onmessage?: (event: { data: { type: string; query: string; ids: string[] } }) => void;
+      postMessage(message: { type: string; spaces?: Space[]; memos?: Memo[]; query?: string }) {
+        if (message.type === 'update') this.index.update(message.spaces ?? [], message.memos ?? [], []);
+        if (message.type === 'query') {
+          const query = message.query ?? '';
+          const ids = this.index.search(query);
+          queueMicrotask(() => this.onmessage?.({ data: { type: 'results', query, ids } }));
+        }
+      }
       terminate() {}
     },
   );
@@ -172,6 +182,48 @@ afterEach(() => {
 });
 
 describe('web workspace interactions', () => {
+  it('shows tags for #, finds partial matches, and scopes suggestions with results', async () => {
+    state.memos = [
+      { ...makeMemo('Scratch note'), tags: ['scratch'] },
+      { ...makeMemo('Ideas note'), spaceId: 'ideas', tags: ['Scratchpad', 'other'] },
+      { ...makeMemo('Only body #scratch') },
+    ];
+    const view = await openApp();
+    const search = view.getByRole('textbox', { name: 'Search your wall' });
+    const suggestions = () => Array.from(view.container.querySelectorAll('.search-tags button')).map((button) => button.textContent);
+    await fireEvent.input(search, { target: { value: '#' } });
+    expect(suggestions()).toEqual(['#other', '#scratch', '#Scratchpad']);
+    await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(2));
+    await fireEvent.input(search, { target: { value: '#scra' } });
+    expect(suggestions()).toEqual(['#scratch', '#Scratchpad']);
+    await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(2));
+    expect(view.queryByText('Only body #scratch')).toBeNull();
+    await fireEvent.click(view.getByRole('button', { name: 'Inbox' }));
+    expect(suggestions()).toEqual(['#scratch']);
+    expect(view.getAllByRole('article')).toHaveLength(1);
+    await fireEvent.click(view.container.querySelector('.search-tags button')!);
+    expect((search as HTMLInputElement).value).toBe('#scratch');
+    expect(document.activeElement).toBe(search);
+    await fireEvent.input(search, { target: { value: '#missing' } });
+    expect(view.getByText('No matching tags in this search scope.')).toBeTruthy();
+    await waitFor(() => expect(view.queryAllByRole('article')).toHaveLength(0));
+  });
+
+  it('shows the changelog inside Settings and preserves the actual previous release', async () => {
+    localStorage.setItem('scratchwall.version.loaded', '0.1.0');
+    const view = await openApp();
+    expect(view.queryByRole('heading', { name: 'Changelog' })).toBeNull();
+    await fireEvent.click(view.getByRole('button', { name: /Settings & preferences/ }));
+    expect(view.getByRole('heading', { name: 'Changelog' })).toBeTruthy();
+    const previous = view.getByText('Previous').closest('li')!;
+    expect(previous.textContent).toContain('0.1.0');
+    expect(previous.classList.contains('previous')).toBe(true);
+    expect(view.getByText('Current').closest('li')!.textContent).toContain(currentVersion);
+    await fireEvent.click(view.getByRole('button', { name: 'Close dialog' }));
+    await fireEvent.click(view.getByRole('button', { name: /Settings & preferences/ }));
+    expect(view.getByText('Previous').closest('li')!.textContent).toContain('0.1.0');
+  });
+
   function mockFeedLayout(view: Awaited<ReturnType<typeof openApp>>, scrollTop: number) {
     const feed = view.getByRole('region', { name: 'Memos' });
     Object.defineProperties(feed, {

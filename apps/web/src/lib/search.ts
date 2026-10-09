@@ -1,13 +1,24 @@
 import type { Attachment, Memo, SearchDocument, Space } from './types';
-import { normalize, searchableText } from './tags';
-
-const TAG_QUERY = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)$/u;
+import { normalize, normalizeTags, searchableText } from './tags';
 
 export function parseSearchQuery(query: string): { kind: 'text' | 'tag'; needle: string } {
   const trimmed = query.trim();
-  const tag = trimmed.match(TAG_QUERY);
-  if (tag) return { kind: 'tag', needle: normalize(tag[1]) };
+  if (trimmed.startsWith('#')) return { kind: 'tag', needle: normalize(trimmed.slice(1)) };
   return { kind: 'text', needle: searchableText([trimmed]).trim() };
+}
+
+export function suggestSearchTags(
+  memos: Memo[],
+  query: string,
+  selectedSpace: string,
+  searchAllSpaces: boolean
+): string[] {
+  const parsed = parseSearchQuery(query);
+  if (parsed.kind !== 'tag') return [];
+  return normalizeTags(
+    memos.filter((memo) => searchAllSpaces || memo.spaceId === selectedSpace).flatMap((memo) => memo.tags)
+  ).filter((tag) => normalize(tag).startsWith(parsed.needle))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function documentFrom(memo: Memo, spaceName: string | undefined, filenames: string[]): SearchDocument {
@@ -47,11 +58,11 @@ export class SearchIndex {
 
   search(query: string): string[] {
     const parsed = parseSearchQuery(query);
-    if (!parsed.needle) return [];
+    if (parsed.kind === 'text' && !parsed.needle) return [];
     const ids: string[] = [];
     for (const document of this.documents.values()) {
       const hit = parsed.kind === 'tag'
-        ? document.tags.includes(parsed.needle)
+        ? document.tags.some((tag) => tag.startsWith(parsed.needle))
         : document.haystack.includes(parsed.needle);
       if (hit) ids.push(document.id);
     }

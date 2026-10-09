@@ -5,9 +5,14 @@ target/
 data/
 .env
 .secrets/
-/bot/
 *.jks
 *.keystore
 apps/web/src-tauri/gen/schemas/
 apps/web/src-tauri/gen/apple/
 artifacts/
+
+.env.*
+!.env.example
+compose.*.yml
+*.local.json
+apps/web/src-tauri/gen/android/

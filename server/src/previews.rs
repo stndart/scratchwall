@@ -78,7 +78,9 @@ pub fn guarded_url(raw: &str) -> Result<Url, AppError> {
         return Err(AppError::BadRequest("url must be http or https".into()));
     }
     if parsed.username() != "" || parsed.password().is_some() {
-        return Err(AppError::BadRequest("url must not include credentials".into()));
+        return Err(AppError::BadRequest(
+            "url must not include credentials".into(),
+        ));
     }
     let host = parsed
         .host_str()
@@ -128,7 +130,8 @@ fn ip_is_blocked(ip: IpAddr) -> bool {
                 || v6.is_unique_local()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || v6.to_ipv4_mapped()
+                || v6
+                    .to_ipv4_mapped()
                     .is_some_and(|mapped| ip_is_blocked(IpAddr::V4(mapped)))
         }
     }
@@ -150,7 +153,7 @@ fn preview_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent("Scratchwall/0.1.0 (+https://scratch.morad.uk)")
+            .user_agent("Scratchwall/0.1.0")
             .build()
             .expect("preview http client")
     })
@@ -216,10 +219,7 @@ async fn fetch_html(start: &Url) -> Result<(Url, Vec<u8>), anyhow::Error> {
     anyhow::bail!("too many redirects")
 }
 
-async fn read_limited(
-    response: reqwest::Response,
-    limit: usize,
-) -> Result<Vec<u8>, anyhow::Error> {
+async fn read_limited(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, anyhow::Error> {
     let mut stream = response.bytes_stream();
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -312,9 +312,10 @@ fn parse_html(html: &str, base: &Url) -> ParsedHtml {
     }
     for tag in tags_named(html, "link") {
         let rel = attr(tag, "rel").unwrap_or_default().to_ascii_lowercase();
-        if !rel.split_whitespace().any(|part| {
-            part == "icon" || part == "shortcut" || part == "apple-touch-icon"
-        }) {
+        if !rel
+            .split_whitespace()
+            .any(|part| part == "icon" || part == "shortcut" || part == "apple-touch-icon")
+        {
             continue;
         }
         if let Some(href) = attr(tag, "href")
@@ -372,7 +373,10 @@ fn tags_named<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
     while let Some(idx) = lower[from..].find(&open) {
         let start = from + idx;
         let rest = &haystack[start..];
-        let end = rest.find('>').map(|at| start + at + 1).unwrap_or(haystack.len());
+        let end = rest
+            .find('>')
+            .map(|at| start + at + 1)
+            .unwrap_or(haystack.len());
         tags.push(&haystack[start..end]);
         from = end;
         if tags.len() > 80 {
@@ -401,7 +405,9 @@ fn attr(tag: &str, name: &str) -> Option<String> {
         Some(b'"') => ('"', &rest[1..]),
         Some(b'\'') => ('\'', &rest[1..]),
         _ => {
-            let end = rest.find(|ch: char| ch.is_whitespace() || ch == '>').unwrap_or(rest.len());
+            let end = rest
+                .find(|ch: char| ch.is_whitespace() || ch == '>')
+                .unwrap_or(rest.len());
             return Some(rest[..end].to_owned());
         }
     };
@@ -425,7 +431,9 @@ fn decode_entities(value: &str) -> String {
                 "apos" | "#39" | "#x27" => "'",
                 "nbsp" => " ",
                 other if other.starts_with('#') => {
-                    let code = if let Some(hex) = other.strip_prefix("#x").or_else(|| other.strip_prefix("#X"))
+                    let code = if let Some(hex) = other
+                        .strip_prefix("#x")
+                        .or_else(|| other.strip_prefix("#X"))
                     {
                         u32::from_str_radix(hex, 16).ok()
                     } else {
@@ -639,7 +647,9 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let unauth = reqwest::Client::new()
-            .get(format!("http://{addr}/api/v1/previews?url=https://example.com"))
+            .get(format!(
+                "http://{addr}/api/v1/previews?url=https://example.com"
+            ))
             .send()
             .await
             .unwrap();

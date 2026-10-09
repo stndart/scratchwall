@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS users (
   next_seq INTEGER NOT NULL DEFAULT 0,
   UNIQUE(issuer, subject)
 );
+CREATE TABLE IF NOT EXISTS integration_tokens (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  spaces_json TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,

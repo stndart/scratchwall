@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte';
   import Icon from './components/Icon.svelte';
   import Dialog from './components/Dialog.svelte';
+  import Changelog from './components/Changelog.svelte';
+  import AgentSettings from './components/AgentSettings.svelte';
   import PendingFile from './components/PendingFile.svelte';
   import MediaPreview from './components/MediaPreview.svelte';
   import MemoBody from './components/MemoBody.svelte';
@@ -61,10 +63,11 @@
   } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
   import { registerWebUpdate } from './lib/pwa';
+  import { recordLoadedVersion } from './lib/changelog';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder } from './lib/memoActions';
-  import { isVisibleMemo } from './lib/search';
+  import { isVisibleMemo, parseSearchQuery, suggestSearchTags } from './lib/search';
   import { isUrlOnlyBody } from './lib/links';
   import { firstMemoUrl } from './lib/memoText';
 
@@ -111,6 +114,7 @@
   let composerInput: HTMLTextAreaElement;
   let searchInput: HTMLInputElement;
   let settingsOpen = false;
+  let previousVersion: string | undefined;
   let previewAttachment: Attachment | undefined;
   let shortcutsOpen = false;
   let spaceForm: { space?: Space } | undefined;
@@ -149,6 +153,8 @@
     memos.filter((memo) => memo.spaceId === selectedSpace).flatMap((memo) => memo.tags),
   ).sort((a, b) => a.localeCompare(b));
   $: spaceNames = new Map(spaces.map((space) => [space.id, space.name]));
+  $: tagSearch = parseSearchQuery(query).kind === 'tag';
+  $: searchTags = suggestSearchTags(memos, query, selectedSpace, searchAllSpaces);
   $: hasDraft =
     !!body.trim() ||
     !!selectedFiles.length ||
@@ -945,6 +951,7 @@
   }
 
   onMount(() => {
+    previousVersion = recordLoadedVersion();
     searchWorker = new Worker(
       new URL('./lib/search.worker.ts', import.meta.url),
       { type: 'module' },
@@ -1331,6 +1338,17 @@
             onclick={() => (searchAllSpaces = false)}
             >{activeSpace?.name ?? 'This space'}</button
           >
+        </div>{/if}
+      {#if tagSearch}<div class="search-tags" aria-label="Matching tags">
+          {#if searchTags.length}
+            <span>Tags</span>
+            {#each searchTags as tag}<button
+                onclick={() => {
+                  query = `#${tag}`;
+                  renderLimit = 200;
+                  searchInput.focus();
+                }}>#{tag}</button>{/each}
+          {:else}<span>No matching tags in this search scope.</span>{/if}
         </div>{/if}
       {#if error}<div class="error-banner" role="status">
           <Icon name="warning" size={18} /><span>{error}</span
@@ -1851,6 +1869,8 @@
         ></a
       >
     </div>
+    <Changelog {previousVersion} />
+    <AgentSettings {spaces} subject={profile?.subject ?? ''} />
     <div class="settings-section">
       <button class="settings-action danger" onclick={signOut}
         ><Icon name="logout" size={18} /><span

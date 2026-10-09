@@ -123,7 +123,7 @@ fn verified_profile(
 static RENEW_LOCKS: std::sync::LazyLock<Vec<tokio::sync::Mutex<()>>> =
     std::sync::LazyLock::new(|| (0..64).map(|_| tokio::sync::Mutex::new(())).collect());
 
-async fn renew_membership(state: &AppState, user_id: i64) -> Result<(), AppError> {
+pub(crate) async fn renew_membership(state: &AppState, user_id: i64) -> Result<(), AppError> {
     let _guard = RENEW_LOCKS[user_id as usize % 64].lock().await;
     let row = sqlx::query("SELECT c.*,u.subject FROM oidc_credentials c JOIN users u ON u.id=c.user_id WHERE c.user_id=?")
         .bind(user_id).fetch_optional(&state.db).await?.ok_or(AppError::Unauthorized)?;
@@ -289,7 +289,7 @@ fn require_refresh_token(token: &TokenResponse) -> Result<&str, AppError> {
     token.refresh_token.as_deref().ok_or_else(|| {
         tracing::error!("OIDC token response omitted refresh_token");
         AppError::BadRequest(
-            "OIDC provider did not issue a refresh token. Add offline_access to the VoidAuth client scopes and keep Skip Consent enabled.".into(),
+            "OIDC provider did not issue a refresh token. Enable offline_access and refresh tokens on the OIDC client.".into(),
         )
     })
 }
@@ -401,9 +401,17 @@ fn native_app_url(code: &str) -> String {
 }
 
 fn native_intent_url(code: &str) -> String {
-    format!(
-        "intent://auth/callback?code={code}#Intent;scheme=scratchwall;package=uk.morad.scratchwall;end"
-    )
+    let package =
+        std::env::var("NATIVE_IDENTIFIER").unwrap_or_else(|_| "org.scratchwall.app".into());
+    let package = if package
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+    {
+        package.as_str()
+    } else {
+        "org.scratchwall.app"
+    };
+    format!("intent://auth/callback?code={code}#Intent;scheme=scratchwall;package={package};end")
 }
 
 fn native_return_html(code: &str) -> String {
@@ -806,7 +814,7 @@ mod tests {
     fn native_return_page_can_be_opened_manually() {
         let html = native_return_html("abc_CODE-123");
         assert!(html.contains(r#"href="scratchwall://auth/callback?code=abc_CODE-123""#));
-        assert!(html.contains("package=uk.morad.scratchwall"));
+        assert!(html.contains("package=org.scratchwall.app"));
         assert!(html.contains("Open Scratchwall"));
         assert!(html.contains("<iframe"));
     }

@@ -41,7 +41,7 @@ impl Config {
                 .trim_end_matches('/')
                 .into(),
             oidc_issuer: env::var("OIDC_ISSUER")
-                .unwrap_or_else(|_| "https://void.morad.uk/oidc".into())
+                .context("OIDC_ISSUER is required")?
                 .trim_end_matches('/')
                 .into(),
             oidc_client_id: env::var("OIDC_CLIENT_ID").unwrap_or_default(),
@@ -49,7 +49,7 @@ impl Config {
             oidc_groups_claim: env::var("OIDC_GROUPS_CLAIM").unwrap_or_else(|_| "groups".into()),
             allowed_groups: Arc::new(
                 env::var("OIDC_ALLOWED_GROUPS")
-                    .unwrap_or_else(|_| "admins,devs".into())
+                    .unwrap_or_else(|_| "scratchwall".into())
                     .split(',')
                     .map(|v| v.trim().to_owned())
                     .filter(|v| !v.is_empty())

@@ -1,3 +1,4 @@
+import { nativeServerOrigin } from './serverOrigin';
 import type { Profile } from './types';
 
 const TOKEN_KEY = 'scratchwall.native.session';
@@ -33,7 +34,7 @@ async function acceptUrl(url: string): Promise<Profile | undefined> {
   const pending = JSON.parse(localStorage.getItem(VERIFIER_KEY) ?? 'null') as { verifier: string; expiresAt: number } | null;
   const verifier = pending && pending.expiresAt > Date.now() ? pending.verifier : undefined;
   if (!verifier) throw new Error('Sign-in expired. Press Continue with VoidAuth again.');
-  const response = await fetch('https://scratch.morad.uk/api/v1/auth/native/exchange', {
+  const response = await fetch(`${nativeServerOrigin()}/api/v1/auth/native/exchange`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code, codeVerifier: verifier })
   });
@@ -71,5 +72,5 @@ export async function startNativeLogin(): Promise<void> {
   localStorage.setItem(VERIFIER_KEY, JSON.stringify({ verifier, expiresAt: Date.now() + 600_000 }));
   const value = await challenge(verifier);
   const { openUrl } = await import('@tauri-apps/plugin-opener');
-  await openUrl(`https://scratch.morad.uk/api/v1/auth/login?mode=native&codeChallenge=${encodeURIComponent(value)}`);
+  await openUrl(`${nativeServerOrigin()}/api/v1/auth/login?mode=native&codeChallenge=${encodeURIComponent(value)}`);
 }

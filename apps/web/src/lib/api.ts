@@ -1,3 +1,4 @@
+import { nativeServerOrigin } from './serverOrigin';
 import type { Attachment, LinkPreview, PendingOperation, Profile, SyncRequest, SyncResponse } from './types';
 import { applyServerChanges, attachmentSource, cacheNativeStream, getCursor, pendingOperations, putAttachment, rejectOperation } from './repository';
 import { clearNativeToken, isNative, nativeToken, startNativeLogin } from './nativeAuth';
@@ -9,8 +10,12 @@ export function cancelRequests() {
   requests.abort();
   requests = new AbortController();
 }
-export function apiOrigin() { return isNative() && !API_BASE ? 'https://scratch.morad.uk' : API_BASE; }
+export function apiOrigin() { return isNative() ? nativeServerOrigin() : API_BASE; }
 function canTransfer() { return navigator.onLine && document.visibilityState !== 'hidden' && !localStorage.getItem('scratchwall.loggedOut'); }
+
+export async function integrationRequest(path: string, init?: RequestInit) {
+  return request(`/api/v1/integrations${path}`, init).then((response) => response.json());
+}
 
 export class UnauthorizedError extends Error {}
 
@@ -157,7 +162,7 @@ export async function uploadPendingAttachments(attachments: Attachment[]) {
 }
 
 export function fileUrl(id: string) {
-  const origin = isNative() && !API_BASE ? 'https://scratch.morad.uk' : API_BASE;
+  const origin = isNative() ? nativeServerOrigin() : API_BASE;
   return `${origin}/api/v1/files/${encodeURIComponent(id)}`;
 }
 

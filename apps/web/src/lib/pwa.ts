@@ -1,4 +1,5 @@
 import { isNative } from './nativeAuth';
+import { rememberVersionBeforeRefresh } from './changelog';
 
 const CHECK_MS = 60 * 60 * 1000;
 
@@ -11,7 +12,13 @@ export function registerWebUpdate(onNeedRefresh: () => void): {
     typeof navigator === 'undefined' ||
     !('serviceWorker' in navigator)
   ) {
-    return { apply: () => location.reload(), stop: () => {} };
+    return {
+      apply: () => {
+        rememberVersionBeforeRefresh();
+        location.reload();
+      },
+      stop: () => {},
+    };
   }
 
   let registration: ServiceWorkerRegistration | undefined;
@@ -66,6 +73,7 @@ export function registerWebUpdate(onNeedRefresh: () => void): {
 
   return {
     apply: () => {
+      rememberVersionBeforeRefresh();
       const worker = waiting ?? registration?.waiting;
       if (!worker) {
         location.reload();

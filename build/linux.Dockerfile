@@ -20,8 +20,13 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
-RUN pnpm --dir apps/web tauri build --no-bundle \
+COPY scripts/native-config.mjs scripts/native-config.mjs
+ARG VITE_API_BASE=http://localhost:8080
+ARG NATIVE_IDENTIFIER=org.scratchwall.app
+ENV VITE_API_BASE=$VITE_API_BASE NATIVE_IDENTIFIER=$NATIVE_IDENTIFIER
+RUN node scripts/native-config.mjs
+RUN pnpm --dir apps/web tauri build --config src-tauri/tauri.local.json --no-bundle \
     && mkdir -p /artifacts \
     && cp apps/web/src-tauri/target/release/scratchwall /artifacts/scratchwall
-RUN pnpm --dir apps/web tauri build --bundles appimage \
+RUN pnpm --dir apps/web tauri build --config src-tauri/tauri.local.json --bundles appimage \
     && cp apps/web/src-tauri/target/release/bundle/appimage/*.AppImage /artifacts/

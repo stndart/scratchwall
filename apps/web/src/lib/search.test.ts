@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchDocuments, isVisibleMemo, parseSearchQuery, SearchIndex } from './search';
+import { buildSearchDocuments, isVisibleMemo, parseSearchQuery, SearchIndex, suggestSearchTags } from './search';
 import type { Attachment, Memo, Space } from './types';
 
 const space: Space = {
@@ -48,7 +48,7 @@ describe('local substring search documents', () => {
     expect(index.search('new space')).toEqual(['one']);
   });
 
-  it('treats a bare #tag query as an exact tag filter, not a body substring', () => {
+  it('treats a #tag query as a tag prefix filter without matching the body', () => {
     const index = new SearchIndex();
     index.update(
       [space],
@@ -58,8 +58,36 @@ describe('local substring search documents', () => {
     expect(parseSearchQuery('#WatchLater')).toEqual({ kind: 'tag', needle: 'watchlater' });
     expect(index.search('#WatchLater')).toEqual(['tagged']);
     expect(index.search('#watchlater')).toEqual(['tagged']);
+    expect(index.search('#watch')).toEqual(['tagged']);
     expect(index.search('watchlater')).toEqual(['tagged', 'mention']);
     expect(index.search('#missing')).toEqual([]);
+  });
+
+  it('lists tagged memos for # and matches Unicode and normalized tag prefixes', () => {
+    const index = new SearchIndex();
+    index.update([space], [
+      memo('scratch', 'irrelevant', ['Scratch']),
+      memo('unicode', 'irrelevant', ['Важное']),
+      memo('width', 'irrelevant', ['Ｓｃｒａｔｃｈpad']),
+      memo('body', '#scratch #важное', []),
+    ], []);
+    expect(parseSearchQuery(' # ')).toEqual({ kind: 'tag', needle: '' });
+    expect(index.search('#')).toEqual(['scratch', 'unicode', 'width']);
+    expect(index.search(' #ScRa ')).toEqual(['scratch', 'width']);
+    expect(index.search('#ВАЖ')).toEqual(['unicode']);
+    expect(index.search('')).toEqual([]);
+  });
+
+  it('suggests matching tags once and respects the search scope', () => {
+    const memos = [
+      memo('one', 'irrelevant', ['Scratch', 'scratch', 'Other']),
+      { ...memo('two', 'irrelevant', ['Scratchpad', 'Elsewhere']), spaceId: 'other' },
+    ];
+    expect(suggestSearchTags(memos, '#', space.id, true)).toEqual(['Elsewhere', 'Other', 'Scratch', 'Scratchpad']);
+    expect(suggestSearchTags(memos, '#scra', space.id, true)).toEqual(['Scratch', 'Scratchpad']);
+    expect(suggestSearchTags(memos, '#SCRA', space.id, false)).toEqual(['Scratch']);
+    expect(suggestSearchTags(memos, '#missing', space.id, true)).toEqual([]);
+    expect(suggestSearchTags(memos, 'scratch', space.id, true)).toEqual([]);
   });
 
   it('can keep search results inside the current space', () => {

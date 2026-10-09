@@ -1,0 +1,6 @@
+{
+  "url": "https://scratchwall.example.com",
+  "user": "your-oidc-subject-from-account-info",
+  "spaces": ["Inbox", "Backlog"],
+  "token": "sw_read_replace-with-a-token-from-settings"
+}

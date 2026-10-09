@@ -9,3 +9,8 @@ node_modules
 apps/web/src-tauri/gen
 *.jks
 *.keystore
+
+.env.*
+compose.*.yml
+**/*.local.json
+.secrets

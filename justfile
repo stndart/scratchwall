@@ -25,11 +25,3 @@ build-android:
 [doc("Build only Linux ELF + AppImage via Docker, then publish")]
 build-linux:
     .\scripts\build-release.ps1 -Linux
-
-[doc("Build the Telegram bot Linux ELF into artifacts/linux")]
-build-telegram:
-    docker build -f build/telegram-bot.Dockerfile -t scratchwall-telegram-builder .
-    New-Item -ItemType Directory -Force -Path artifacts\linux | Out-Null
-    docker create --name scratchwall-telegram-artifacts scratchwall-telegram-builder
-    docker cp scratchwall-telegram-artifacts:/artifacts/scratchwall-telegram artifacts/linux/scratchwall-telegram
-    docker rm scratchwall-telegram-artifacts

@@ -548,6 +548,27 @@ nav {
   padding: 7px 10px;
   font-size: 11px;
 }
+.search-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: min(790px, 100%);
+  margin: 0 auto;
+  padding: 0 24px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  max-height: 150px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.search-tags button {
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
 .search-scope {
   display: flex;
   align-items: center;
@@ -1705,7 +1726,8 @@ dialog::backdrop {
   .batch-bar {
     width: calc(100% - 32px);
   }
-  .search-scope {
+  .search-scope,
+  .search-tags {
     padding-left: 20px;
   }
   .empty {

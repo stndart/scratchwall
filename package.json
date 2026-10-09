@@ -7,7 +7,7 @@
     "dev": "pnpm --filter @scratchwall/web dev",
     "build": "pnpm --filter @scratchwall/web build",
     "check": "pnpm --filter @scratchwall/web check",
-    "test": "pnpm --filter @scratchwall/web test && cargo test --manifest-path server/Cargo.toml",
+    "test": "pnpm --filter @scratchwall/web test && pnpm --filter @scratchwall/mcp test && cargo test --manifest-path server/Cargo.toml",
     "server": "cargo run --manifest-path server/Cargo.toml",
     "tauri": "pnpm --filter @scratchwall/web tauri"
   }
