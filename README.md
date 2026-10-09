@@ -88,3 +88,7 @@ Android project files are generated locally. Keep release keystores/properties o
 Persistent server state lives in `data/` (or `DATA_PATH`). To back up consistently, stop the container, archive that directory, then start it. Restore into an empty data directory while stopped. Preserve the session encryption key; losing it invalidates encrypted provider credentials. Notes/files are not end-to-end encrypted; protect server storage and device accounts. Attachments are limited to 2 GiB; browser quotas may be lower.
 
 Install the PWA from the browser menu. **Ctrl/Cmd+K** searches, **N** focuses the composer, **Enter** saves, **Shift+Enter** adds a line, and **?** shows shortcuts. Settings can change Enter behavior. Memos support bold, italics, inline code and fenced code; other Markdown stays literal. Tags are separate labels. Drafts are per-space and remain only while the app is open.
+
+## License
+
+Scratchwall is released under the [MIT License](LICENSE).

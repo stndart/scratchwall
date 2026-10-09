@@ -2,6 +2,7 @@
   "name": "@scratchwall/mcp",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Read-only, user and space scoped Scratchwall MCP server",
   "engines": { "node": ">=24" },

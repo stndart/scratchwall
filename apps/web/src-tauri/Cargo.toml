@@ -3,6 +3,7 @@ name = "scratchwall"
 version = "0.1.0"
 description = "A fast, local-first wall of memos"
 authors = ["Scratchwall"]
+license = "MIT"
 edition = "2024"
 
 [lib]
