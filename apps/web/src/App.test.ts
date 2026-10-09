@@ -189,17 +189,23 @@ describe('web workspace interactions', () => {
       { ...makeMemo('Only body #scratch') },
     ];
     const view = await openApp();
-    const search = view.getByRole('textbox', { name: 'Search your wall' });
+    const search = view.getByRole('combobox', { name: 'Search your wall' });
     const suggestions = () => Array.from(view.container.querySelectorAll('.search-tags button')).map((button) => button.textContent);
+    const dropdown = view.container.querySelector<HTMLDataListElement>(`#${search.getAttribute('list')}`)!;
+    expect(dropdown.tagName).toBe('DATALIST');
+    const dropdownSuggestions = () => Array.from(dropdown.options).map((option) => option.value);
     await fireEvent.input(search, { target: { value: '#' } });
     expect(suggestions()).toEqual(['#other', '#scratch', '#Scratchpad']);
+    expect(dropdownSuggestions()).toEqual(['#other', '#scratch', '#Scratchpad']);
     await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(2));
     await fireEvent.input(search, { target: { value: '#scra' } });
     expect(suggestions()).toEqual(['#scratch', '#Scratchpad']);
+    expect(dropdownSuggestions()).toEqual(['#scratch', '#Scratchpad']);
     await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(2));
     expect(view.queryByText('Only body #scratch')).toBeNull();
     await fireEvent.click(view.getByRole('button', { name: 'Inbox' }));
     expect(suggestions()).toEqual(['#scratch']);
+    expect(dropdownSuggestions()).toEqual(['#scratch']);
     expect(view.getAllByRole('article')).toHaveLength(1);
     await fireEvent.click(view.container.querySelector('.search-tags button')!);
     expect((search as HTMLInputElement).value).toBe('#scratch');
@@ -207,6 +213,9 @@ describe('web workspace interactions', () => {
     await fireEvent.input(search, { target: { value: '#missing' } });
     expect(view.getByText('No matching tags in this search scope.')).toBeTruthy();
     await waitFor(() => expect(view.queryAllByRole('article')).toHaveLength(0));
+    expect(dropdownSuggestions()).toEqual([]);
+    await fireEvent.input(search, { target: { value: 'scratch' } });
+    expect(dropdownSuggestions()).toEqual([]);
   });
 
   it('shows the changelog inside Settings and preserves the actual previous release', async () => {
@@ -430,7 +439,7 @@ describe('web workspace interactions', () => {
       type: 'image/png',
       lastModified: 10,
     });
-    await paste(view.getByRole('textbox', { name: 'Search your wall' }), [
+    await paste(view.getByRole('combobox', { name: 'Search your wall' }), [
       image,
     ]);
     expect(view.queryByRole('button', { name: 'Remove image.png' })).toBeNull();
@@ -454,7 +463,7 @@ describe('web workspace interactions', () => {
     expect((textarea as HTMLTextAreaElement).value).toBe('A pasted thought');
     await fireEvent.keyDown(document, { key: 'k', metaKey: true });
     expect(document.activeElement).toBe(
-      view.getByRole('textbox', { name: 'Search your wall' }),
+      view.getByRole('combobox', { name: 'Search your wall' }),
     );
     await fireEvent.keyDown(document.body, { key: 'n' });
     await waitFor(() => expect(document.activeElement).toBe(textarea));

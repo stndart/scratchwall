@@ -6,6 +6,10 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.10.09.1',
+    changes: ['Tag suggestions appear in the search field dropdown.'],
+  },
+  {
     version: '2026.10.09',
     changes: [
       'Changelog in Settings remembers your previous version.',

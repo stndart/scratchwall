@@ -1269,6 +1269,7 @@
             oninput={() => (renderLimit = 200)}
             placeholder="Search your wall"
             aria-label="Search your wall"
+            list="search-tag-suggestions"
           />{#if searching}<span class="tiny-spinner" aria-label="Searching"
             ></span>{:else if query}<button
               class="icon-button"
@@ -1280,6 +1281,9 @@
               }}><Icon name="close" size={16} /></button
             >{:else}<kbd>Ctrl K</kbd>{/if}</label
         >
+        <datalist id="search-tag-suggestions">
+          {#each searchTags as tag}<option value={`#${tag}`}></option>{/each}
+        </datalist>
       </header>
       <div class="space-heading">
         <div>
