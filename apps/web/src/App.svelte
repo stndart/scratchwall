@@ -7,6 +7,7 @@
   import PendingFile from './components/PendingFile.svelte';
   import MediaPreview from './components/MediaPreview.svelte';
   import MemoBody from './components/MemoBody.svelte';
+  import SpaceList from './components/SpaceList.svelte';
   import type {
     Attachment,
     LinkPreview,
@@ -30,6 +31,7 @@
     putAttachment,
     putMemo,
     putSpace,
+    putSpaces,
     setProfile,
   } from './lib/repository';
   import {
@@ -62,14 +64,16 @@
     restoreAnchor,
   } from './lib/feedScroll';
   import { initializeNativeAuth, isNative } from './lib/nativeAuth';
-  import { registerWebUpdate } from './lib/pwa';
+  import { isStandalone, registerWebUpdate } from './lib/pwa';
   import { recordLoadedVersion } from './lib/changelog';
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder } from './lib/memoActions';
-  import { isVisibleMemo, parseSearchQuery, suggestSearchTags } from './lib/search';
+  import { addSearchTag, isVisibleMemo, parseSearchQuery, searchTagFilters, suggestSearchTags } from './lib/search';
   import { isUrlOnlyBody } from './lib/links';
   import { firstMemoUrl } from './lib/memoText';
+  import { memoSelection } from './lib/memoSelection';
+  import { swipeToOpen } from './lib/swipe';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   let spaces: Space[] = [];
@@ -108,6 +112,8 @@
   let disconnectSocket: (() => void) | undefined;
   let syncFlight: Promise<void> | undefined;
   let stickToBottom = true;
+  let showScrollBottom = false;
+  let scrollAfterSearch = false;
   let selecting = false;
   let selectedMemoIds = new Set<string>();
   let movingMemoIds: string[] = [];
@@ -120,6 +126,10 @@
   let spaceForm: { space?: Space } | undefined;
   let spaceName = '';
   let spaceSaving = false;
+  let reorderingSpaces = false;
+  let appInstalled = isNative() || isStandalone();
+  let installHelpOpen = false;
+  let installing = false;
   let theme = localStorage.getItem('scratchwall.theme') ?? 'system';
   let enterSends = localStorage.getItem('scratchwall.enterSends') !== 'false';
   let savedMessage = '';
@@ -153,7 +163,13 @@
     memos.filter((memo) => memo.spaceId === selectedSpace).flatMap((memo) => memo.tags),
   ).sort((a, b) => a.localeCompare(b));
   $: spaceNames = new Map(spaces.map((space) => [space.id, space.name]));
+  $: spaceCounts = new Map(spaces.map((space) => [space.id, memos.filter((memo) => memo.spaceId === space.id).length]));
+  $: allTags = normalizeTags(memos.flatMap((memo) => memo.tags)).sort((a, b) => a.localeCompare(b));
   $: tagSearch = parseSearchQuery(query).kind === 'tag';
+  $: filterTags = searchTagFilters(query);
+  $: selectedFilterTags = filterTags.filter((tag) => allTags.some((known) => known.toLocaleLowerCase() === tag.toLocaleLowerCase()));
+  $: canCompose = !!activeSpace && (!query.trim() || (tagSearch && !searchAllSpaces));
+  $: inheritedTags = canCompose && !editing && query.trim() ? filterTags : [];
   $: searchTags = suggestSearchTags(memos, query, selectedSpace, searchAllSpaces);
   $: hasDraft =
     !!body.trim() ||
@@ -188,10 +204,21 @@
       top: feed.scrollHeight,
       behavior: smooth ? 'smooth' : 'auto',
     });
+    onFeedScroll();
   }
 
   function onFeedScroll() {
-    if (feed) stickToBottom = isNearBottom(feed);
+    if (!feed) return;
+    stickToBottom = isNearBottom(feed);
+    showScrollBottom = !isNearBottom(feed, Math.max(160, feed.clientHeight / 2));
+  }
+
+  function watchFeed(node: HTMLElement) {
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(onFeedScroll);
+    observer?.observe(node);
+    if (node.firstElementChild) observer?.observe(node.firstElementChild);
+    void tick().then(onFeedScroll);
+    return { destroy: () => observer?.disconnect() };
   }
 
   async function showMore() {
@@ -255,12 +282,16 @@
         filename,
       })),
     });
-    if (query) searchWorker?.postMessage({ type: 'query', query });
+    if (query) {
+      if (scroll) scrollAfterSearch = true;
+      searchWorker?.postMessage({ type: 'query', query });
+    }
     await tick();
     if (scroll) await scrollNewest(true);
     else if (followBottom && feed && feed.scrollHeight !== previousHeight)
       feed.scrollTo({ top: feed.scrollHeight, behavior: 'auto' });
     else if (anchor && feed) restoreAnchor(feed, anchor);
+    onFeedScroll();
   }
 
   async function sync() {
@@ -313,7 +344,7 @@
         : {
             id: uuidv7(),
             name,
-            position: spaces.length,
+            position: Math.max(-1, ...spaces.map((space) => space.position)) + 1,
             isInbox: false,
             createdAt: now,
             updatedAt: now,
@@ -354,6 +385,55 @@
     void sync();
   }
 
+  async function reorderSpaces(ids: string[]) {
+    if (reorderingSpaces || ids.length !== spaces.length || new Set(ids).size !== spaces.length) return false;
+    const byId = new Map(spaces.map((space) => [space.id, space]));
+    if (ids.some((id) => !byId.has(id))) return false;
+    const now = new Date().toISOString();
+    const ordered = ids.map((id, position) => {
+      const space = byId.get(id)!;
+      return space.position === position ? space : { ...space, position, updatedAt: now, syncState: 'pending' as const };
+    });
+    const updates = ordered.filter((space) => space !== byId.get(space.id));
+    if (!updates.length) return true;
+    reorderingSpaces = true;
+    spaces = ordered;
+    try {
+      await putSpaces(updates.map((space) => ({ space, operation: operation('upsert_space', space.id, space) })));
+      await refresh();
+      void sync();
+      return true;
+    } catch (value) {
+      error = value instanceof Error ? value.message : 'Could not reorder spaces.';
+      await refresh();
+      return false;
+    } finally {
+      reorderingSpaces = false;
+    }
+  }
+
+  function browseTag(tag: string) {
+    query = `#${tag}`;
+    searchAllSpaces = true;
+    renderLimit = 200;
+    sidebarOpen = false;
+    leaveSelection();
+    if (feed) feed.scrollTop = 0;
+  }
+
+  function filterByTag(tag: string) {
+    query = addSearchTag(query, tag, allTags);
+    searchAllSpaces = false;
+    renderLimit = 200;
+    leaveSelection();
+    if (feed) feed.scrollTop = 0;
+  }
+
+  function removeTagFilter(tag: string) {
+    query = filterTags.filter((value) => value !== tag).map((value) => `#${value}`).join(' ');
+    renderLimit = 200;
+  }
+
   function addTag(value = tagDraft) {
     const cleaned = value.replace(/^#/, '').trim();
     if (
@@ -370,6 +450,7 @@
   async function submitMemo() {
     if (
       submitting ||
+      !canCompose ||
       (!body.trim() && selectedFiles.length === 0) ||
       !selectedSpace
     )
@@ -380,7 +461,10 @@
     }
     submitting = true;
     if (tagDraft.trim()) addTag();
+    const tags = normalizeTags([...inheritedTags, ...explicitTags]);
     const wasEditing = !!editing;
+    const dismissKeyboard = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    let saved = false;
     const now = new Date().toISOString();
     const id = editing?.id ?? uuidv7();
     const attachmentIds = editing?.attachmentIds
@@ -412,7 +496,7 @@
         id,
         spaceId: editing?.spaceId ?? selectedSpace,
         body: body.trim(),
-        tags: normalizeTags(explicitTags),
+        tags,
         attachmentIds,
         createdAt: editing?.createdAt ?? now,
         bumpedAt: editing?.bumpedAt,
@@ -420,11 +504,12 @@
         syncState: 'pending',
       };
       await putMemo(memo, operation('upsert_memo', memo.id, memo));
+      saved = true;
       body = '';
       explicitTags = [];
       selectedFiles = [];
       editing = undefined;
-      if (wasEditing) cancelEditing();
+      if (wasEditing) cancelEditing(false);
       else drafts.delete(selectedSpace);
       drafts = new Map(drafts);
       savedMessage = 'Memo saved on this device';
@@ -439,7 +524,10 @@
     } finally {
       submitting = false;
       await tick();
-      composerInput?.focus();
+      if (saved && dismissKeyboard) {
+        const focused = document.activeElement;
+        if (focused instanceof HTMLElement && focused.closest('.composer')) focused.blur();
+      } else composerInput?.focus();
     }
   }
 
@@ -460,7 +548,7 @@
     void tick().then(() => composerInput?.focus());
   }
 
-  function cancelEditing() {
+  function cancelEditing(focus = true) {
     editing = undefined;
     const draft = drafts.get(selectedSpace);
     drafts.delete(selectedSpace);
@@ -469,7 +557,7 @@
     explicitTags = draft?.tags ?? [];
     selectedFiles = draft?.files ?? [];
     tagDraft = '';
-    void tick().then(() => composerInput?.focus());
+    if (focus) void tick().then(() => composerInput?.focus());
   }
 
   function toggleMemoSelection(id: string) {
@@ -732,7 +820,7 @@
   function handleFiles(fileList: FileList | null) {
     if (submitting) return;
     if (fileList) {
-      query = '';
+      if (!canCompose) query = '';
       selectedFiles = [...new Set([...selectedFiles, ...Array.from(fileList)])];
       if (fileInput) fileInput.value = '';
       void tick().then(() => composerInput?.focus());
@@ -782,12 +870,12 @@
     const files = filesFromClipboard(event.clipboardData);
     if (files.length) {
       event.preventDefault();
-      query = '';
+      if (!canCompose) query = '';
       selectedFiles = [...new Set([...selectedFiles, ...files])];
       void tick().then(() => composerInput?.focus());
       return;
     }
-    if (isTypingTarget(event.target) || query) return;
+    if (isTypingTarget(event.target) || !canCompose) return;
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;
     event.preventDefault();
@@ -819,7 +907,7 @@
     ) {
       if (key === 'n') {
         event.preventDefault();
-        query = '';
+        if (!canCompose) query = '';
         void tick().then(() => composerInput?.focus());
       }
       if (key === '?') {
@@ -854,6 +942,14 @@
   function navigateFeed(event: KeyboardEvent) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    if (target.matches('.memo') && (event.key === ' ' || (selecting && event.key === 'Enter'))) {
+      event.preventDefault();
+      if (!event.repeat && target.dataset.memoId) {
+        selecting = true;
+        toggleMemoSelection(target.dataset.memoId);
+      }
+      return;
+    }
     if (
       !target.matches('.memo') ||
       !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
@@ -884,9 +980,28 @@
   }
 
   async function installApp() {
-    await installPrompt?.prompt();
-    await installPrompt?.userChoice;
+    if (installing || appInstalled) return;
+    sidebarOpen = false;
+    if (!installPrompt) {
+      settingsOpen = false;
+      installHelpOpen = true;
+      return;
+    }
+    const prompt = installPrompt;
     installPrompt = undefined;
+    installing = true;
+    try {
+      await prompt.prompt();
+      if ((await prompt.userChoice).outcome === 'accepted') {
+        appInstalled = true;
+        installHelpOpen = false;
+      }
+    } catch {
+      settingsOpen = false;
+      installHelpOpen = true;
+    } finally {
+      installing = false;
+    }
   }
 
   function dateLabel(date: string) {
@@ -960,6 +1075,10 @@
       if (event.data.type === 'results' && event.data.query === query) {
         resultIds = new Set(event.data.ids);
         searching = false;
+        if (scrollAfterSearch) {
+          scrollAfterSearch = false;
+          void scrollNewest(true);
+        }
       }
     };
     const onOnline = () => {
@@ -984,12 +1103,18 @@
     document.addEventListener('paste', handlePaste);
     document.addEventListener('keydown', handleGlobalKey);
     const onInstallPrompt = (event: Event) => {
+      if (appInstalled) return;
       event.preventDefault();
       installPrompt = event as typeof installPrompt;
     };
     const onInstalled = () => {
       installPrompt = undefined;
+      appInstalled = true;
+      installHelpOpen = false;
     };
+    const displayMode = window.matchMedia?.('(display-mode: standalone)');
+    const onDisplayMode = () => { appInstalled = isNative() || isStandalone(); };
+    displayMode?.addEventListener('change', onDisplayMode);
     window.addEventListener('beforeinstallprompt', onInstallPrompt);
     window.addEventListener('appinstalled', onInstalled);
     // Native clients cannot attach their bearer token to a browser WebSocket.
@@ -1088,6 +1213,7 @@
       document.removeEventListener('keydown', handleGlobalKey);
       window.removeEventListener('beforeinstallprompt', onInstallPrompt);
       window.removeEventListener('appinstalled', onInstalled);
+      displayMode?.removeEventListener('change', onDisplayMode);
       window.clearTimeout(savedTimer);
       window.clearInterval(foregroundSync);
       pwa.stop();
@@ -1131,30 +1257,20 @@
       }}><Icon name="plus" size={17} /></button
     >
   </div>
-  <nav aria-label="Spaces">
-    {#each spaces as space (space.id)}
-      <div class="space-row" class:active={space.id === selectedSpace}>
-        <button
-          class="space-button"
-          aria-current={space.id === selectedSpace ? 'page' : undefined}
-          onclick={() => openSpace(space.id)}
-        >
-          <Icon name={space.isInbox ? 'inbox' : 'folder'} size={19} /><span
-            >{space.name}</span
-          ><small
-            >{memos.filter((memo) => memo.spaceId === space.id).length}</small
-          >
-        </button>
-      </div>
-    {/each}
-    <button
-      class="new-space"
-      onclick={() => {
+  <div class="sidebar-scroll">
+    <SpaceList {spaces} {selectedSpace} counts={spaceCounts} disabled={reorderingSpaces}
+      onselect={openSpace} onreorder={reorderSpaces} onadd={() => {
         sidebarOpen = false;
         addSpace();
-      }}><Icon name="plus" size={18} />New space</button
-    >
-  </nav>
+      }} />
+    {#if allTags.length}<section class="sidebar-tags" aria-label="All tags">
+      <h2>All tags <span>{allTags.length}</span></h2>
+      <div class="tag-cloud">
+        {#each allTags as tag}<button class:active={query === `#${tag}`} aria-pressed={query === `#${tag}`}
+          onclick={() => browseTag(tag)}>#{tag}</button>{/each}
+      </div>
+    </section>{/if}
+  </div>
   <div class="sidebar-bottom">
     <div class="local-note">
       <Icon name="cloud" size={19} />
@@ -1176,7 +1292,7 @@
         >
       </div>
     </div>
-    {#if installPrompt}<button class="sidebar-action" onclick={installApp}
+    {#if !appInstalled}<button class="sidebar-action" onclick={installApp} disabled={installing}
         ><Icon name="download" size={18} />Install Scratchwall</button
       >{/if}
     <button
@@ -1247,7 +1363,10 @@
     ondrop={handleDrop}
   >
     <aside class="sidebar">{@render navigation()}</aside>
-    <main class="workspace" id="workspace">
+    <main class="workspace" id="workspace" use:swipeToOpen={{
+      enabled: () => !!window.matchMedia?.('(max-width: 760px)').matches && !sidebarOpen && !selecting && !document.querySelector('dialog[open]'),
+      open: () => { sidebarOpen = true; },
+    }}>
       <header class="workspace-header">
         <div class="breadcrumb">
           <button
@@ -1282,11 +1401,11 @@
             >{:else}<kbd>Ctrl K</kbd>{/if}</label
         >
         <datalist id="search-tag-suggestions">
-          {#each searchTags as tag}<option value={`#${tag}`}></option>{/each}
+          {#each searchTags as tag}<option value={addSearchTag(query, tag, allTags)}></option>{/each}
         </datalist>
       </header>
       <div class="space-heading">
-        <div>
+        <div class="heading-copy">
           <span class="eyebrow"
             >{query
               ? 'Find something you saved'
@@ -1312,6 +1431,7 @@
             class="secondary"
             class:active={selecting}
             aria-pressed={selecting}
+            aria-label={selecting ? 'Done' : 'Select memos'}
             onclick={() => (selecting ? leaveSelection() : (selecting = true))}
             ><Icon name={selecting ? 'close' : 'select'} size={17} /><span
               >{selecting ? 'Done' : 'Select'}</span
@@ -1340,15 +1460,17 @@
             class:active={!searchAllSpaces}
             aria-pressed={!searchAllSpaces}
             onclick={() => (searchAllSpaces = false)}
-            >{activeSpace?.name ?? 'This space'}</button
+          >{activeSpace?.name ?? 'This space'}</button
           >
+          {#each selectedFilterTags as tag}<button class="filter-tag" aria-label={`Remove filter ${tag}`}
+            onclick={() => removeTagFilter(tag)}>#{tag}<Icon name="close" size={12} /></button>{/each}
         </div>{/if}
-      {#if tagSearch}<div class="search-tags" aria-label="Matching tags">
+      {#if tagSearch && (searchTags.length || !selectedFilterTags.length)}<div class="search-tags" aria-label="Matching tags">
           {#if searchTags.length}
             <span>Tags</span>
             {#each searchTags as tag}<button
                 onclick={() => {
-                  query = `#${tag}`;
+                  query = addSearchTag(query, tag, allTags);
                   renderLimit = 200;
                   searchInput.focus();
                 }}>#{tag}</button>{/each}
@@ -1365,7 +1487,7 @@
           >
         </div>{/if}
       {#if selecting}<div class="batch-bar">
-          <strong>{selectedMemoIds.size} selected</strong><button
+          <strong role="status">{selectedMemoIds.size} selected</strong><button
             onclick={() =>
               (selectedMemoIds = new Set(renderedMemos.map(({ id }) => id)))}
             >Select shown</button
@@ -1388,9 +1510,13 @@
             ><Icon name="trash" size={16} />Delete</button
           >
         </div>{/if}
+      <div class="feed-area">
       <div
         class="feed"
         bind:this={feed}
+        use:watchFeed
+        use:memoSelection={{ selecting, selected: selectedMemoIds, memoIds: renderedMemos.map((memo) => memo.id),
+          onchange: (ids, mode) => { selectedMemoIds = ids; selecting = mode; } }}
         onscroll={onFeedScroll}
         role="region"
         aria-label={query ? 'Search results' : 'Memos'}
@@ -1525,10 +1651,7 @@
               {/if}
               {#if memo.tags.length}<div class="tags">
                   {#each memo.tags as tag}<button
-                      onclick={() => {
-                        query = `#${tag}`;
-                        renderLimit = 200;
-                      }}>#{tag}</button
+                      onclick={() => filterByTag(tag)}>#{tag}</button
                     >{/each}
                 </div>{/if}
               <footer class="memo-footer">
@@ -1593,7 +1716,10 @@
           {/each}
         </div>
       </div>
-      {#if !query}
+      {#if showScrollBottom}<button class="scroll-bottom" aria-label="Scroll to bottom" title="Scroll to bottom"
+        onclick={() => scrollNewest(true)}><Icon name="arrow-down" size={18} /></button>{/if}
+      </div>
+      {#if canCompose}
         <div class="composer-area">
           <form
             class="composer"
@@ -1611,7 +1737,7 @@
                 ><button
                   type="button"
                   disabled={submitting}
-                  onclick={cancelEditing}>Cancel</button
+                  onclick={() => cancelEditing()}>Cancel</button
                 >
               </div>{/if}
             {#if selectedFiles.length}<div class="queued-files">
@@ -1635,6 +1761,9 @@
               placeholder="What's on your mind?"
               aria-label="Memo text"
             ></textarea>
+            {#if inheritedTags.length}<div class="inherited-tags" aria-label="Tags inherited from filters">
+              <span>From filters</span>{#each inheritedTags as tag}<span class="inherited-tag">#{tag}</span>{/each}
+            </div>{/if}
             {#if explicitTags.length}<div class="tags selected">
                 {#each explicitTags as tag}<button
                     type="button"
@@ -1665,10 +1794,14 @@
                 ><Icon name="tag" size={16} /><input
                   bind:value={tagDraft}
                   disabled={submitting}
+                  enterkeyhint="enter"
                   onkeydown={(event) => {
+                    if (event.isComposing || event.keyCode === 229) return;
                     if (event.key === 'Enter' || event.key === ',') {
                       event.preventDefault();
+                      event.stopPropagation();
                       addTag();
+                      event.currentTarget.focus({ preventScroll: true });
                     }
                   }}
                   onblur={() => {
@@ -1722,6 +1855,20 @@
     drawer
     onclose={() => (sidebarOpen = false)}>{@render navigation()}</Dialog
   >{/if}
+{#if installHelpOpen}<Dialog title="Install Scratchwall" onclose={() => (installHelpOpen = false)}>
+    <p class="dialog-description">Keep Scratchwall close with its own app icon and window.</p>
+    {#if installPrompt}<button class="primary" onclick={installApp} disabled={installing}>
+      <Icon name="download" size={18} />Install now
+    </button>{:else}
+      <p class="dialog-description">This browser isn't offering a direct install prompt. Use the steps for your device:</p>
+      <dl class="install-steps">
+        <div><dt>iPhone or iPad</dt><dd>Open in Safari, tap Share, then Add to Home Screen.</dd></div>
+        <div><dt>Safari on Mac</dt><dd>Choose File → Add to Dock.</dd></div>
+        <div><dt>Chrome or Edge</dt><dd>Look for Install Scratchwall in the browser menu or the install icon in the address bar. On Android, it may be called Add to Home screen.</dd></div>
+        <div><dt>Other browsers</dt><dd>Look for Install or Add to Home screen in the browser menu. If unavailable, open Scratchwall in Chrome, Edge, or Safari.</dd></div>
+      </dl>
+    {/if}
+  </Dialog>{/if}
 {#if spaceForm}<Dialog
     title={spaceForm.space ? 'Rename space' : 'Make a little space'}
     onclose={() => (spaceForm = undefined)}
@@ -1803,6 +1950,14 @@
         <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
       </div>
       <div>
+        <dt>Reorder a focused space</dt>
+        <dd><kbd>Alt</kbd><kbd>↑ / ↓</kbd></dd>
+      </div>
+      <div>
+        <dt>Select a focused memo</dt>
+        <dd><kbd>Space</kbd></dd>
+      </div>
+      <div>
         <dt>Show shortcuts</dt>
         <dd><kbd>?</kbd></dd>
       </div>
@@ -1852,13 +2007,10 @@
           >Clear downloaded files<small>Keeps your memos and server files</small
           ></span
         ></button
-      >{#if installPrompt}<button class="settings-action" onclick={installApp}
+      >{#if !appInstalled}<button class="settings-action" onclick={installApp} disabled={installing}
           ><Icon name="download" size={18} /><span>Install Scratchwall</span
           ></button
-        >{:else}<p class="install-help">
-          Install from your browser's menu. On iPhone or iPad, use Share → Add
-          to Home Screen.
-        </p>{/if}
+        >{/if}
     </div>
     <div class="settings-section">
       <a

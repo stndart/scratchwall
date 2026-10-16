@@ -1,3 +1,28 @@
+export async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  // Older webviews and HTTP development origins lack the Clipboard API.
+  const focused = document.activeElement;
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+  const input = document.createElement('textarea');
+  input.value = value;
+  input.style.cssText = 'position:fixed;top:0;left:-9999px';
+  input.setAttribute('readonly', '');
+  document.body.append(input);
+  try {
+    input.select();
+    if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
+  } finally {
+    input.remove();
+    if (focused instanceof HTMLElement) focused.focus({ preventScroll: true });
+    selection?.removeAllRanges();
+    for (const range of ranges) selection?.addRange(range);
+  }
+}
+
 export function filesFromClipboard(
   data: DataTransfer | null | undefined,
 ): File[] {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerWebUpdate } from './pwa';
+import { isStandalone, registerWebUpdate } from './pwa';
 import { currentVersion, recordLoadedVersion } from './changelog';
 
 beforeEach(() => {
@@ -57,5 +57,19 @@ describe('registerWebUpdate', () => {
     } finally {
       pwa.stop();
     }
+  });
+});
+
+describe('installed display modes', () => {
+  it('detects a standalone PWA and a regular browser tab', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(display-mode: standalone)' }));
+    expect(isStandalone()).toBe(true);
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    expect(isStandalone()).toBe(false);
+  });
+  it('detects the iOS standalone flag without matchMedia support', () => {
+    vi.stubGlobal('matchMedia', undefined);
+    vi.stubGlobal('navigator', { standalone: true });
+    expect(isStandalone()).toBe(true);
   });
 });

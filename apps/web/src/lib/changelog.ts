@@ -6,6 +6,22 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.10.16',
+    changes: [
+      'Write in the current space while filtering by tags; new memos inherit every selected tag.',
+      'A roomier desktop layout and a shortcut to the bottom of the wall.',
+      'Swipe right for spaces, hold a space to reorder, and smoother mobile keyboard behavior.',
+    ],
+  },
+  {
+    version: '2026.10.12',
+    changes: [
+      'Copy code blocks and browse all tags from the sidebar.',
+      'Reorder spaces with touch, mouse, or keyboard; find PWA installation in the app.',
+      'Hold a memo or its side margin, then drag to select a range. Click to toggle selections.',
+    ],
+  },
+  {
     version: '2026.10.09.1',
     changes: ['Tag suggestions appear in the search field dropdown.'],
   },

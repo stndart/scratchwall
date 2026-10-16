@@ -1,6 +1,7 @@
 <script lang="ts">
   import { inlineParts, memoBlocks, type InlinePart } from '../lib/memoText';
   import { highlightCode } from '../lib/codeHighlight';
+  import CodeBlock from './CodeBlock.svelte';
 
   let { body }: { body: string } = $props();
   const blocks = $derived(memoBlocks(body).map((block) => block.type === 'code'
@@ -15,11 +16,7 @@
 <div class="memo-body">
   {#each blocks as block}
     {#if block.type === 'code'}
-      <div class="memo-code-block">
-        <div class="memo-code-language">{block.highlighted.language ?? 'Code'}</div>
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus code to scroll long lines.) -->
-        <pre class="memo-code" tabindex="0" aria-label={`${block.highlighted.language ?? 'Plain text'} code snippet`}><code class="hljs">{@html block.highlighted.html}</code></pre>
-      </div>
+      <CodeBlock value={block.value} highlighted={block.highlighted} />
     {:else}<span class="memo-prose">{@render inline(block.parts)}</span>{/if}
   {/each}
 </div>

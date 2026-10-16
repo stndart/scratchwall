@@ -87,7 +87,13 @@ Android project files are generated locally. Keep release keystores/properties o
 
 Persistent server state lives in `data/` (or `DATA_PATH`). To back up consistently, stop the container, archive that directory, then start it. Restore into an empty data directory while stopped. Preserve the session encryption key; losing it invalidates encrypted provider credentials. Notes/files are not end-to-end encrypted; protect server storage and device accounts. Attachments are limited to 2 GiB; browser quotas may be lower.
 
-Install the PWA from the browser menu. **Ctrl/Cmd+K** searches, **N** focuses the composer, **Enter** saves, **Shift+Enter** adds a line, and **?** shows shortcuts. Settings can change Enter behavior. Memos support bold, italics, inline code and fenced code; other Markdown stays literal. Tags are separate labels. Drafts are per-space and remain only while the app is open.
+Choose **Install Scratchwall** in the sidebar, mobile spaces drawer, or Settings. Supported browsers open an install prompt; others show installation steps. **Ctrl/Cmd+K** searches, **N** focuses the composer, **Enter** saves, **Shift+Enter** adds a line, and **?** shows shortcuts. Settings can change Enter behavior. Memos support bold, italics, inline code and fenced code with a Copy button; other Markdown stays literal. Click a tag in the sidebar to search across spaces. Drafts are per-space and remain only while the app is open.
+
+On mobile, swipe right across the wall to open spaces, then hold a space and drag to reorder it. On desktop, drag a space's grip. Keyboard users can focus a space and press **Alt+↑/↓**, or focus its grip and use **↑/↓**. Ordering is saved offline and synced across devices, including Inbox.
+
+Click a memo's tag to filter within its space. Select more suggested tags or enter a query such as `#Reading #Important` to require all of them. The composer remains available in the current space, and each new memo inherits the filters. Choosing **All spaces** hides the composer. The down-arrow shortcut appears when you scroll far enough above the bottom. On mobile, sending a memo dismisses the keyboard; entering a tag keeps the tag field focused.
+
+Hold a memo's surrounding area (or the desktop feed margin beside it) for a moment, then drag to select a range. Dragging back shrinks the range; starting on a selected memo removes that range from the selection. In selection mode, short clicks or taps toggle memos. Text selection, links, attachment controls, and code-copy buttons keep their usual behavior. **Space** toggles a focused memo; **Esc** exits selection mode.
 
 ## License
 

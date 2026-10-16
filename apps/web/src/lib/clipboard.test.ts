@@ -1,7 +1,40 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest';
-import { filesFromClipboard, isTypingTarget } from './clipboard';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { copyText, filesFromClipboard, isTypingTarget } from './clipboard';
+
+afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
+
+describe('copyText', () => {
+  it('falls back without the Clipboard API and restores focus and text selection', async () => {
+    vi.stubGlobal('navigator', {});
+    const button = document.createElement('button');
+    const prose = document.createElement('p');
+    prose.textContent = 'Selected text';
+    document.body.append(button, prose);
+    button.focus();
+    const range = document.createRange();
+    range.selectNodeContents(prose);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    expect(window.getSelection()!.toString()).toBe('Selected text');
+    const execCommand = vi.fn(() => {
+      expect(document.querySelector('textarea')?.value).toBe('  raw code\n');
+      return true;
+    });
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+    try {
+      await copyText('  raw code\n');
+      expect(execCommand).toHaveBeenCalledWith('copy');
+      expect(document.querySelector('textarea')).toBeNull();
+      expect(document.activeElement).toBe(button);
+      expect(window.getSelection()!.toString()).toBe('Selected text');
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand');
+      window.getSelection()!.removeAllRanges();
+    }
+  });
+});
 
 function file(name: string, type = 'image/png', lastModified = 1) {
   return new File([name], name, { type, lastModified });

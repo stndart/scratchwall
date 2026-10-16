@@ -1,11 +1,31 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import MemoBody from './MemoBody.svelte';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('memo body rendering', () => {
+  it('copies only the chosen raw code block, including whitespace and literal HTML', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const raw = '  <div>literal & text</div>\n\n';
+    const view = render(MemoBody, { body: 'Before\n```html\n' + raw + '```\n```text\nsecond\n```' });
+    const buttons = view.getAllByRole('button', { name: 'Copy code' });
+    await fireEvent.click(buttons[0]);
+    await waitFor(() => expect(buttons[0].textContent).toContain('Copied'));
+    expect(buttons[1].textContent?.trim()).toBe('Copy');
+    expect(writeText).toHaveBeenCalledWith(raw);
+    await fireEvent.click(buttons[1]);
+    expect(writeText).toHaveBeenLastCalledWith('second\n');
+  });
+  it('reports a clipboard failure without claiming success', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => { throw new Error('Denied'); }) } });
+    const view = render(MemoBody, { body: '```text\ncode\n```' });
+    await fireEvent.click(view.getByRole('button', { name: 'Copy code' }));
+    await view.findByText('Could not copy. Select the code to copy it manually.');
+    expect(view.queryByText('Copied')).toBeNull();
+  });
   it('renders highlighted snippets as keyboard-accessible preformatted code', () => {
     const code = '  const greeting = "Hello";\n' + 'x'.repeat(400) + '\n';
     const view = render(MemoBody, { body: 'Before\n```js\n' + code + '```\nAfter' });

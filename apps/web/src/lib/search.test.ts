@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchDocuments, isVisibleMemo, parseSearchQuery, SearchIndex, suggestSearchTags } from './search';
+import { addSearchTag, buildSearchDocuments, isVisibleMemo, parseSearchQuery, searchTagFilters, SearchIndex, suggestSearchTags } from './search';
 import type { Attachment, Memo, Space } from './types';
 
 const space: Space = {
@@ -101,5 +101,27 @@ describe('local substring search documents', () => {
     expect(isVisibleMemo(inbox, 'scratch', hits, 'inbox', false)).toBe(true);
     expect(isVisibleMemo(other, 'scratch', hits, 'inbox', false)).toBe(false);
     expect(isVisibleMemo(inbox, 'scratch', new Set(), 'inbox', true)).toBe(false);
+  });
+
+  it('requires every tag filter and preserves tag names containing spaces', () => {
+    const index = new SearchIndex();
+    index.update([space], [
+      memo('both', 'unrelated', ['Reading list', 'Важное']),
+      memo('one', 'unrelated', ['Reading list']),
+      memo('body', '#reading list #важное', []),
+    ], []);
+    expect(searchTagFilters(' #Reading list #ВАЖ #reading list ')).toEqual(['Reading list', 'ВАЖ']);
+    expect(index.search('#reading list #ВАЖ')).toEqual(['both']);
+    expect(index.search('#reading list #missing')).toEqual([]);
+  });
+
+  it('completes the last partial filter and appends suggestions after a complete filter', () => {
+    const known = ['Reading list', 'Important'];
+    expect(addSearchTag('#read', 'Reading list', known)).toBe('#Reading list');
+    expect(addSearchTag('#Reading list #imp', 'Important', known)).toBe('#Reading list #Important');
+    expect(addSearchTag('#Reading list', 'Important', known)).toBe('#Reading list #Important');
+    expect(addSearchTag('#new #', 'Important', known)).toBe('#new #Important');
+    expect(addSearchTag('#Important', 'important', known)).toBe('#Important');
+    expect(suggestSearchTags([memo('one', '', known)], '#Reading list', space.id, false)).toEqual(['Important']);
   });
 });

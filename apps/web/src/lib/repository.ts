@@ -150,13 +150,22 @@ export async function getSnapshot() {
 }
 
 export async function putSpace(space: Space, operation?: PendingOperation) {
+  await putSpaces([{ space, operation }]);
+}
+
+export async function putSpaces(updates: Array<{ space: Space; operation?: PendingOperation }>) {
+  if (!updates.length) return;
   if (isNative()) {
-    await nativeTransaction([{ sql: 'INSERT OR REPLACE INTO spaces(id,value_json,position) VALUES($1,$2,$3)', values: [space.id, JSON.stringify(space), space.position] }, ...operationStatement(operation)]);
+    await nativeTransaction(updates.flatMap(({ space, operation }) => [
+      { sql: 'INSERT OR REPLACE INTO spaces(id,value_json,position) VALUES($1,$2,$3)', values: [space.id, JSON.stringify(space), space.position] }, ...operationStatement(operation)
+    ]));
     return;
   }
   const transaction = (await db()).transaction(['spaces', 'operations'], 'readwrite');
-  await transaction.objectStore('spaces').put(space);
-  if (operation) await transaction.objectStore('operations').put(operation);
+  for (const { space, operation } of updates) {
+    await transaction.objectStore('spaces').put(space);
+    if (operation) await transaction.objectStore('operations').put(operation);
+  }
   await transaction.done;
 }
 

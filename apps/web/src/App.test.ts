@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   notifyUpdate: undefined as (() => void) | undefined,
   applyUpdate: vi.fn(),
+  putSpaces: vi.fn(),
 }));
 vi.mock('./lib/repository', () => ({
   getSnapshot: () => state.getSnapshot(),
@@ -37,6 +38,7 @@ vi.mock('./lib/repository', () => ({
       space,
     ];
   },
+  putSpaces: (...args: unknown[]) => state.putSpaces(...args),
   deleteMemoLocal: vi.fn(),
   deleteSpaceLocal: vi.fn(),
   clearLocalData: vi.fn(),
@@ -63,7 +65,8 @@ vi.mock('./lib/nativeAuth', () => ({
   isNative: () => false,
   initializeNativeAuth: async () => () => {},
 }));
-vi.mock('./lib/pwa', () => ({
+vi.mock('./lib/pwa', async (original) => ({
+  ...(await original<typeof import('./lib/pwa')>()),
   registerWebUpdate: (callback: () => void) => {
     state.notifyUpdate = callback;
     return { apply: () => state.applyUpdate(), stop: vi.fn() };
@@ -134,8 +137,12 @@ beforeEach(() => {
   });
   state.spaces = [
     makeSpace('inbox', 'Inbox', true),
-    makeSpace('ideas', 'Ideas'),
+    { ...makeSpace('ideas', 'Ideas'), position: 1 },
   ];
+  state.putSpaces.mockImplementation(async (updates: Array<{ space: Space }>) => {
+    const changed = new Map(updates.map(({ space }) => [space.id, space]));
+    state.spaces = state.spaces.map((space) => changed.get(space.id) ?? space).sort((a, b) => a.position - b.position);
+  });
   state.getSnapshot.mockImplementation(async () => ({
     memos: state.memos,
     spaces: state.spaces,
@@ -182,6 +189,179 @@ afterEach(() => {
 });
 
 describe('web workspace interactions', () => {
+  it('composes from a memo tag in the current space, inherits all filters on every send, and hides in all spaces', async () => {
+    state.memos = [
+      { ...makeMemo('Tagged memo'), tags: ['Reading', 'Important'] },
+      { ...makeMemo('Other space'), spaceId: 'ideas', tags: ['Reading', 'Important'] },
+    ];
+    const view = await openApp();
+    await fireEvent.click(view.getByRole('article').querySelector<HTMLButtonElement>('.tags button')!);
+    expect(view.getByRole('button', { name: 'Inbox' }).getAttribute('aria-pressed')).toBe('true');
+    await fireEvent.click(view.getByLabelText('Matching tags').querySelector('button')!);
+    const search = view.getByRole('combobox', { name: 'Search your wall' }) as HTMLInputElement;
+    expect(search.value).toBe('#Reading #Important');
+    const textarea = view.getByRole('textbox', { name: 'Memo text' });
+    await fireEvent.input(view.getByRole('combobox', { name: 'Add a tag' }), { target: { value: 'reading' } });
+    await fireEvent.keyDown(view.getByRole('combobox', { name: 'Add a tag' }), { key: 'Enter' });
+    for (const body of ['First filtered memo', 'Second filtered memo']) {
+      await fireEvent.input(textarea, { target: { value: body } });
+      await fireEvent.click(view.getByRole('button', { name: 'Save memo' }));
+      await view.findByText(body);
+      await view.findByRole('button', { name: 'Save memo' });
+      expect(state.putMemo.mock.lastCall![0]).toMatchObject({ body, spaceId: 'inbox', tags: ['Reading', 'Important'] });
+    }
+    await fireEvent.input(textarea, { target: { value: 'Keep this draft' } });
+    await fireEvent.click(view.getByRole('button', { name: 'All spaces' }));
+    expect(view.queryByRole('textbox', { name: 'Memo text' })).toBeNull();
+    await fireEvent.click(view.getByRole('button', { name: 'Inbox' }));
+    expect((view.getByRole('textbox', { name: 'Memo text' }) as HTMLTextAreaElement).value).toBe('Keep this draft');
+    await fireEvent.click(view.getByRole('button', { name: 'Remove filter Important' }));
+    expect(search.value).toBe('#Reading');
+    await fireEvent.click(view.getByRole('button', { name: 'Clear search' }));
+    expect(view.queryByLabelText('Tags inherited from filters')).toBeNull();
+    expect((view.getByRole('textbox', { name: 'Memo text' }) as HTMLTextAreaElement).value).toBe('Keep this draft');
+  });
+
+  it('allows an empty-result filtered memo and retains its tags if the scope changes while saving a file', async () => {
+    let finishAttachment!: () => void;
+    state.putAttachment.mockImplementationOnce(() => new Promise<void>((resolve) => { finishAttachment = resolve; }));
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: '#new #Важное' } });
+    await fireEvent.click(view.getByRole('button', { name: 'Inbox' }));
+    await paste(view.getByRole('textbox', { name: 'Memo text' }), [new File(['a'], 'file.txt')]);
+    expect((view.getByRole('combobox', { name: 'Search your wall' }) as HTMLInputElement).value).toBe('#new #Важное');
+    await fireEvent.click(view.getByRole('button', { name: 'Save memo' }));
+    await waitFor(() => expect(finishAttachment).toBeTypeOf('function'));
+    await fireEvent.click(view.getByRole('button', { name: 'All spaces' }));
+    finishAttachment();
+    await waitFor(() => expect(state.putMemo).toHaveBeenCalledTimes(1));
+    expect(state.putMemo.mock.calls[0][0]).toMatchObject({ tags: ['new', 'Важное'], spaceId: 'inbox' });
+    await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(1));
+  });
+
+  it('keeps the mobile tag field focused after Enter and dismisses focus after saving', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const view = await openApp();
+    const textarea = view.getByRole('textbox', { name: 'Memo text' });
+    await fireEvent.input(textarea, { target: { value: 'Mobile memo' } });
+    const tag = view.getByRole('combobox', { name: 'Add a tag' }) as HTMLInputElement;
+    tag.focus();
+    await fireEvent.input(tag, { target: { value: 'One' } });
+    await fireEvent.keyDown(tag, { key: 'Enter' });
+    expect(document.activeElement).toBe(tag);
+    expect(tag.value).toBe('');
+    expect(state.putMemo).not.toHaveBeenCalled();
+    await fireEvent.input(tag, { target: { value: 'Two' } });
+    await fireEvent.keyDown(tag, { key: ',' });
+    expect(document.activeElement).toBe(tag);
+    await fireEvent.click(view.getByRole('button', { name: 'Save memo' }));
+    await view.findByText('Mobile memo');
+    await waitFor(() => expect(document.activeElement?.closest('.composer')).toBeNull());
+    expect(state.putMemo.mock.calls[0][0].tags).toEqual(['One', 'Two']);
+  });
+
+  it('preserves a failed mobile draft and restores input focus', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    state.putMemo.mockRejectedValueOnce(new Error('Storage full'));
+    const view = await openApp();
+    const textarea = view.getByRole('textbox', { name: 'Memo text' });
+    await fireEvent.input(textarea, { target: { value: 'Keep on failure' } });
+    await fireEvent.keyDown(textarea, { key: 'Enter' });
+    await view.findByText('Storage full');
+    expect((textarea as HTMLTextAreaElement).value).toBe('Keep on failure');
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
+  });
+
+  it('opens the mobile spaces drawer from a right swipe', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(max-width: 760px)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const view = await openApp();
+    const heading = view.getByRole('heading', { name: /^Inbox/ });
+    await fireEvent.touchStart(heading, { touches: [{ clientX: 40, clientY: 100 }] });
+    await fireEvent.touchMove(heading, { touches: [{ clientX: 150, clientY: 110 }] });
+    await fireEvent.touchEnd(heading, { touches: [], changedTouches: [{ clientX: 150, clientY: 110 }] });
+    expect(view.getByRole('dialog', { name: 'Your spaces' })).toBeTruthy();
+  });
+  it('shows every tag compactly and searches across spaces from the mobile drawer', async () => {
+    state.memos = [
+      { ...makeMemo('first'), tags: ['Shared', 'важное'] },
+      { ...makeMemo('second'), spaceId: 'ideas', tags: ['shared', 'Idea'] },
+    ];
+    const view = await openApp();
+    const cloud = view.getByRole('region', { name: 'All tags' });
+    expect(cloud.querySelectorAll('button')).toHaveLength(3);
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: '#Shared' } });
+    await fireEvent.click(view.getByRole('button', { name: 'Inbox' }));
+    await fireEvent.click(view.getByRole('button', { name: 'Open spaces' }));
+    const drawer = view.getByRole('dialog', { name: 'Your spaces' });
+    await fireEvent.click(Array.from(drawer.querySelectorAll('button')).find((button) => button.textContent === '#Idea')!);
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect((view.getByRole('combobox', { name: 'Search your wall' }) as HTMLInputElement).value).toBe('#Idea');
+    await waitFor(() => expect(view.getAllByRole('article')).toHaveLength(1));
+    expect(view.getByText('second')).toBeTruthy();
+  });
+
+  it('persists space ordering and its sync operations without switching the active space', async () => {
+    const view = await openApp();
+    const ideas = view.getByRole('button', { name: /^Ideas/ });
+    ideas.focus();
+    await fireEvent.keyDown(ideas, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(state.putSpaces).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(Array.from(view.container.querySelectorAll('.space-button')).map((button) => button.textContent?.trim())).toEqual(['Ideas0', 'Inbox0']));
+    expect(state.putSpaces.mock.calls[0][0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ space: expect.objectContaining({ id: 'ideas', position: 0, syncState: 'pending' }), operation: expect.objectContaining({ kind: 'upsert_space', entityId: 'ideas' }) }),
+      expect.objectContaining({ space: expect.objectContaining({ id: 'inbox', position: 1, isInbox: true }), operation: expect.objectContaining({ kind: 'upsert_space', entityId: 'inbox' }) }),
+    ]));
+    expect(view.getByRole('heading', { name: /^Inbox/ })).toBeTruthy();
+    expect(document.activeElement).toBe(ideas);
+    view.unmount();
+    const reopened = await openApp();
+    expect(reopened.container.querySelector('.space-button')?.textContent).toContain('Ideas');
+  });
+
+  it('restores space order if saving fails', async () => {
+    state.putSpaces.mockRejectedValueOnce(new Error('Storage full'));
+    const view = await openApp();
+    await fireEvent.keyDown(view.getByRole('button', { name: 'Reorder Ideas' }), { key: 'ArrowUp' });
+    await view.findByText('Storage full');
+    await waitFor(() => expect(view.container.querySelector('.space-button')?.textContent).toContain('Inbox'));
+  });
+
+  it('shows installation help, uses each available prompt once, and hides install after success', async () => {
+    const view = await openApp();
+    const install = () => view.getByRole('button', { name: 'Install Scratchwall' });
+    await fireEvent.click(install());
+    expect(view.getByRole('dialog', { name: 'Install Scratchwall' })).toBeTruthy();
+    expect(view.getByText(/Open in Safari, tap Share/)).toBeTruthy();
+    const prompt = vi.fn(async () => {});
+    const event = Object.assign(new Event('beforeinstallprompt', { cancelable: true }), {
+      prompt, userChoice: Promise.resolve({ outcome: 'dismissed' }),
+    });
+    window.dispatchEvent(event);
+    await tick();
+    expect(event.defaultPrevented).toBe(true);
+    await fireEvent.click(view.getByRole('button', { name: 'Install now' }));
+    expect(prompt).toHaveBeenCalledTimes(1);
+    await fireEvent.click(view.getByRole('button', { name: 'Close dialog' }));
+    await fireEvent.click(install());
+    expect(prompt).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('appinstalled'));
+    await tick();
+    expect(view.queryByRole('dialog', { name: 'Install Scratchwall' })).toBeNull();
+    expect(view.queryByRole('button', { name: 'Install Scratchwall' })).toBeNull();
+  });
+
+  it('toggles cards with short clicks in selection mode and with the keyboard', async () => {
+    state.memos = [makeMemo('first'), makeMemo('second')];
+    const view = await openApp();
+    await fireEvent.keyDown(view.getAllByRole('article')[0], { key: ' ' });
+    expect(view.getByText('1 selected')).toBeTruthy();
+    await fireEvent.click(view.getByText('second'));
+    expect(view.getByText('2 selected')).toBeTruthy();
+    await fireEvent.click(view.getByText('first'));
+    expect(view.getByText('1 selected')).toBeTruthy();
+    expect((view.getAllByRole('checkbox', { name: 'Select memo' })[1] as HTMLInputElement).checked).toBe(true);
+  });
+
   it('shows tags for #, finds partial matches, and scopes suggestions with results', async () => {
     state.memos = [
       { ...makeMemo('Scratch note'), tags: ['scratch'] },
@@ -249,6 +429,21 @@ describe('web workspace interactions', () => {
     }
     return feed;
   }
+
+  it('offers a bottom shortcut only when far enough above the end of the feed', async () => {
+    state.memos = Array.from({ length: 10 }, (_, index) => makeMemo(`memo-${index}`));
+    const view = await openApp();
+    const feed = mockFeedLayout(view, 1550);
+    await fireEvent.scroll(feed);
+    expect(view.queryByRole('button', { name: 'Scroll to bottom' })).toBeNull();
+    feed.scrollTop = 500;
+    await fireEvent.scroll(feed);
+    await fireEvent.click(view.getByRole('button', { name: 'Scroll to bottom' }));
+    expect(feed.scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+    feed.scrollTop = 1600;
+    await fireEvent.scroll(feed);
+    expect(view.queryByRole('button', { name: 'Scroll to bottom' })).toBeNull();
+  });
 
   async function backgroundRefresh() {
     const reads = state.getSnapshot.mock.calls.length;

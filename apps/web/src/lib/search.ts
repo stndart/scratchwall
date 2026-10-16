@@ -7,6 +7,20 @@ export function parseSearchQuery(query: string): { kind: 'text' | 'tag'; needle:
   return { kind: 'text', needle: searchableText([trimmed]).trim() };
 }
 
+// A space followed by # starts another filter; spaces within tag names stay intact.
+export function searchTagFilters(query: string): string[] {
+  return query.trim().startsWith('#')
+    ? normalizeTags(query.trim().slice(1).split(/\s+#/u))
+    : [];
+}
+
+export function addSearchTag(query: string, tag: string, knownTags: string[]): string {
+  const tags = searchTagFilters(query);
+  const last = tags.at(-1);
+  if (last && !/\s+#\s*$/u.test(query) && !knownTags.some((known) => normalize(known) === normalize(last))) tags.pop();
+  return normalizeTags([...tags, tag]).map((value) => `#${value}`).join(' ');
+}
+
 export function suggestSearchTags(
   memos: Memo[],
   query: string,
@@ -15,9 +29,16 @@ export function suggestSearchTags(
 ): string[] {
   const parsed = parseSearchQuery(query);
   if (parsed.kind !== 'tag') return [];
-  return normalizeTags(
+  const tags = searchTagFilters(query);
+  const available = normalizeTags(
     memos.filter((memo) => searchAllSpaces || memo.spaceId === selectedSpace).flatMap((memo) => memo.tags)
-  ).filter((tag) => normalize(tag).startsWith(parsed.needle))
+  );
+  const last = /\s+#\s*$/u.test(query) ? '' : tags.at(-1) ?? '';
+  const complete = available.some((tag) => normalize(tag) === normalize(last));
+  return available.filter((tag) =>
+    !tags.some((selected) => normalize(selected) === normalize(tag)) &&
+    (complete || normalize(tag).startsWith(normalize(last)))
+  )
     .sort((a, b) => a.localeCompare(b));
 }
 
@@ -58,11 +79,12 @@ export class SearchIndex {
 
   search(query: string): string[] {
     const parsed = parseSearchQuery(query);
+    const filters = searchTagFilters(query).map(normalize);
     if (parsed.kind === 'text' && !parsed.needle) return [];
     const ids: string[] = [];
     for (const document of this.documents.values()) {
       const hit = parsed.kind === 'tag'
-        ? document.tags.some((tag) => tag.startsWith(parsed.needle))
+        ? (filters.length ? filters : ['']).every((filter) => document.tags.some((tag) => tag.startsWith(filter)))
         : document.haystack.includes(parsed.needle);
       if (hit) ids.push(document.id);
     }

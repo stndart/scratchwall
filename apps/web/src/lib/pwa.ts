@@ -3,6 +3,12 @@ import { rememberVersionBeforeRefresh } from './changelog';
 
 const CHECK_MS = 60 * 60 * 1000;
 
+export function isStandalone(): boolean {
+  return Boolean(window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.matchMedia?.('(display-mode: fullscreen)').matches ||
+    (navigator as Navigator & { standalone?: boolean }).standalone);
+}
+
 export function registerWebUpdate(onNeedRefresh: () => void): {
   apply: () => void;
   stop: () => void;
