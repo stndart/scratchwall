@@ -604,6 +604,7 @@ mod tests {
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
             ingest_token_hash: None,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         }
     }
 

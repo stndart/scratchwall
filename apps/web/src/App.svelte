@@ -4,10 +4,14 @@
   import Dialog from './components/Dialog.svelte';
   import Changelog from './components/Changelog.svelte';
   import AgentSettings from './components/AgentSettings.svelte';
+  import EmbeddingSettings from './components/EmbeddingSettings.svelte';
+  import { EmbeddingProgress } from './lib/embeddingProgress';
+  import { defaultEmbeddingSettings, searchResults, type SearchMode, type SearchOrder, type SemanticHit, type EmbeddingSettings as EmbeddingPreferences } from './lib/semanticSearch';
   import PendingFile from './components/PendingFile.svelte';
   import MediaPreview from './components/MediaPreview.svelte';
   import MemoBody from './components/MemoBody.svelte';
   import SpaceList from './components/SpaceList.svelte';
+  import SpacesDrawer from './components/SpacesDrawer.svelte';
   import type {
     Attachment,
     LinkPreview,
@@ -36,6 +40,8 @@
   } from './lib/repository';
   import {
     apiOrigin,
+    embeddingSettings,
+    semanticSearch,
     cancelRequests,
     connectChanges,
     downloadAttachment,
@@ -54,8 +60,10 @@
     fileExtension,
     formatBytes,
     isAttachmentCached,
+    isPreviewableMedia,
     isVideoMime,
     isVisualPreview,
+    spaceMedia,
   } from './lib/media';
   import {
     captureAnchor,
@@ -69,9 +77,9 @@
   import { filesFromClipboard, isTypingTarget } from './lib/clipboard';
   import { autosizeTextarea } from './lib/composer';
   import { compareMemoOrder } from './lib/memoActions';
-  import { addSearchTag, isVisibleMemo, parseSearchQuery, searchTagFilters, suggestSearchTags } from './lib/search';
+  import { addSearchTag, parseSearchQuery, searchTagFilters, suggestSearchTags } from './lib/search';
   import { isUrlOnlyBody } from './lib/links';
-  import { firstMemoUrl } from './lib/memoText';
+  import { firstMemoUrl, setMemoTask } from './lib/memoText';
   import { memoSelection } from './lib/memoSelection';
   import { swipeToOpen } from './lib/swipe';
 
@@ -88,6 +96,23 @@
   let query = '';
   let searchAllSpaces = true;
   let resultIds = new Set<string>();
+  let embeddingPreferences: EmbeddingPreferences = { ...defaultEmbeddingSettings };
+  const embeddingProgress = new EmbeddingProgress();
+  $: embeddingEta = embeddingProgress.observe(embeddingPreferences);
+  let searchMode: SearchMode = (['exact', 'smart', 'vector'].includes(localStorage.getItem('scratchwall.searchMode') ?? '') ? localStorage.getItem('scratchwall.searchMode') : 'exact') as SearchMode;
+  let searchOrder: SearchOrder = localStorage.getItem('scratchwall.searchOrder') === 'relevant' ? 'relevant' : 'ordered';
+  let similarityThreshold = Math.max(0, Math.min(1, Number(localStorage.getItem('scratchwall.similarity') ?? '0.5') || 0));
+  let omitVideo = localStorage.getItem('scratchwall.omitVideo') === 'true';
+  let semanticIdentity = '';
+  let semanticKey = '';
+  let semanticHits: SemanticHit[] = [];
+  let semanticNotice = '';
+  let semanticBusy = false;
+  let semanticRequest = 0;
+  let semanticTimer: ReturnType<typeof setTimeout> | undefined;
+  let semanticController: AbortController | undefined;
+  let preferencesLoadedAt = 0;
+
   let renderLimit = 200;
   let searching = false;
   let syncing = false;
@@ -98,6 +123,7 @@
   let authChecked = false;
   let checkingSession = true;
   let sidebarOpen = false;
+  let sidebarPull: number | undefined;
   let editing: Memo | undefined;
   let error = '';
   let authExpired = false;
@@ -151,11 +177,15 @@
   let previewBusy = false;
 
   $: activeSpace = spaces.find((space) => space.id === selectedSpace);
-  $: visibleMemos = memos
-    .filter((memo) =>
-      isVisibleMemo(memo, query, resultIds, selectedSpace, searchAllSpaces),
-    )
-    .sort(compareMemoOrder);
+  $: previewSpaceId = memos.find((memo) => memo.id === previewAttachment?.memoId)?.spaceId;
+  $: previewGallery = previewSpaceId
+    ? spaceMedia(memos, attachments, previewSpaceId)
+    : [];
+  $: videoMemoIds = new Set(attachments.filter(a => isVideoMime(a.mimeType)).map(a => a.memoId));
+  $: effectiveSearchMode = embeddingPreferences.enabled && !tagSearch ? searchMode : 'exact';
+  $: visibleMemos = query.trim()
+    ? searchResults(memos.filter(memo => (searchAllSpaces || memo.spaceId === selectedSpace) && (effectiveSearchMode === 'exact' || !omitVideo || !videoMemoIds.has(memo.id))), resultIds, semanticHits, effectiveSearchMode, searchOrder, searchOrder === 'ordered' ? similarityThreshold : 0)
+    : memos.filter(memo => memo.spaceId === selectedSpace).sort(compareMemoOrder);
   $: renderedMemos = query.trim()
     ? visibleMemos.slice(0, renderLimit)
     : visibleMemos.slice(Math.max(0, visibleMemos.length - renderLimit));
@@ -261,7 +291,7 @@
     const snapshot = await getSnapshot();
     // Read the viewport immediately before changing the DOM: a database read
     // can finish after the user has continued scrolling.
-    const followBottom = feed ? isNearBottom(feed) : stickToBottom;
+    const followBottom = !query.trim() && (feed ? isNearBottom(feed) : stickToBottom);
     const previousHeight = feed?.scrollHeight;
     const anchor =
       !scroll && !followBottom && feed ? captureAnchor(feed) : undefined;
@@ -287,11 +317,54 @@
       searchWorker?.postMessage({ type: 'query', query });
     }
     await tick();
-    if (scroll) await scrollNewest(true);
+    if (scroll) await scrollSearchResults();
     else if (followBottom && feed && feed.scrollHeight !== previousHeight)
       feed.scrollTo({ top: feed.scrollHeight, behavior: 'auto' });
     else if (anchor && feed) restoreAnchor(feed, anchor);
     onFeedScroll();
+  }
+
+  async function scrollSearchResults() {
+    await tick();
+    if (query.trim()) feed?.scrollTo({ top: 0, behavior: 'auto' });
+    else await scrollNewest(true);
+  }
+
+  async function loadEmbeddingPreferences() {
+    if (Date.now() - preferencesLoadedAt < 15_000) return;
+    preferencesLoadedAt = Date.now();
+    try { embeddingPreferences = await embeddingSettings(); }
+    catch { /* Exact search stays usable when the server is offline or older. */ }
+  }
+
+  function scheduleSemanticSearch(key: string, enabled: boolean, text: string, all: boolean, space: string, omit: boolean, force = false) {
+    const identity = JSON.stringify([enabled, text.trim(), all ? '' : space, omit]);
+    if (!force && identity === semanticIdentity && key === semanticKey) return;
+    const changed = identity !== semanticIdentity;
+    semanticIdentity = identity; semanticKey = key;
+    const requestId = ++semanticRequest;
+    clearTimeout(semanticTimer);
+    semanticController?.abort();
+    if (changed) semanticHits = [];
+    semanticNotice = ''; semanticBusy = false;
+    if (!enabled || !text.trim() || text.trim().startsWith('#')) return;
+    if (!online) { semanticNotice = 'Semantic search is unavailable offline.'; return; }
+    semanticBusy = true;
+    semanticTimer = setTimeout(async () => {
+      const controller = new AbortController();
+      semanticController = controller;
+      try {
+        const result = await semanticSearch(text, all ? undefined : space, controller.signal, omit);
+        if (requestId !== semanticRequest) return;
+        const anchor = !changed && feed ? captureAnchor(feed) : undefined;
+        semanticHits = result.available ? result.hits : [];
+        if (changed) void scrollSearchResults();
+        else if (anchor && feed) { await tick(); restoreAnchor(feed, anchor); }
+        semanticNotice = result.available ? '' : 'Semantic search is unavailable. Exact matches remain available in Smart.';
+      } catch {
+        if (requestId === semanticRequest && !controller.signal.aborted) semanticNotice = 'Semantic search is unavailable. Exact matches remain available in Smart.';
+      } finally { if (requestId === semanticRequest) semanticBusy = false; }
+    }, force ? 0 : 250);
   }
 
   async function sync() {
@@ -307,6 +380,7 @@
         await refresh();
         reachable = true;
         hasSynced = true;
+        void loadEmbeddingPreferences();
         if (authExpired) error = '';
         authExpired = false;
       } catch (value) {
@@ -586,6 +660,23 @@
     void sync();
   }
 
+  async function changeMemoTask(source: Memo, marker: number, completed: boolean): Promise<boolean> {
+    const memo = memos.find((item) => item.id === source.id);
+    if (!memo || memo.body !== source.body) return false;
+    const changedBody = setMemoTask(memo.body, marker, completed);
+    if (changedBody === memo.body) return true;
+    const changed: Memo = { ...memo, body: changedBody, updatedAt: new Date().toISOString(), syncState: 'pending' };
+    try {
+      await putMemo(changed, operation('upsert_memo', changed.id, changed));
+      await refresh();
+      void sync();
+      return true;
+    } catch (value) {
+      error = value instanceof Error ? value.message : 'Could not save this task.';
+      return false;
+    }
+  }
+
   async function bumpMemos(ids: Iterable<string>) {
     await updateMemos(ids, (memo, now) => ({
       ...memo,
@@ -688,10 +779,7 @@
       }
       return;
     }
-    if (
-      attachment.mimeType.startsWith('image/') ||
-      isVideoMime(attachment.mimeType)
-    ) {
+    if (isPreviewableMedia(attachment)) {
       previewAttachment = attachment;
       return;
     }
@@ -1037,6 +1125,9 @@
       )
     )
       return;
+    embeddingPreferences = { ...defaultEmbeddingSettings };
+    semanticHits = [];
+    preferencesLoadedAt = 0;
     profile = undefined;
     localStorage.setItem('scratchwall.loggedOut', 'true');
     settingsOpen = false;
@@ -1077,7 +1168,7 @@
         searching = false;
         if (scrollAfterSearch) {
           scrollAfterSearch = false;
-          void scrollNewest(true);
+          void scrollSearchResults();
         }
       }
     };
@@ -1204,6 +1295,8 @@
     })();
 
     return () => {
+      clearTimeout(semanticTimer);
+      semanticController?.abort();
       disconnectSocket?.();
       searchWorker.terminate();
       window.removeEventListener('online', onOnline);
@@ -1221,8 +1314,15 @@
     };
   });
 
+  $: semanticRevision = JSON.stringify([memos.map(m => [m.id, m.updatedAt, m.syncState, m.attachmentIds]), attachments.map(a => [a.id, a.remoteReady]), online]);
+  $: scheduleSemanticSearch(semanticRevision, effectiveSearchMode !== 'exact', query, searchAllSpaces, selectedSpace, omitVideo);
+  $: localStorage.setItem('scratchwall.omitVideo', String(omitVideo));
+  $: localStorage.setItem('scratchwall.searchMode', searchMode);
+  $: localStorage.setItem('scratchwall.searchOrder', searchOrder);
+  $: localStorage.setItem('scratchwall.similarity', String(similarityThreshold));
   $: if (searchWorker) {
     searching = Boolean(query.trim());
+    scrollAfterSearch = Boolean(query.trim());
     searchWorker.postMessage({ type: 'query', query });
   }
 </script>
@@ -1364,7 +1464,9 @@
   >
     <aside class="sidebar">{@render navigation()}</aside>
     <main class="workspace" id="workspace" use:swipeToOpen={{
-      enabled: () => !!window.matchMedia?.('(max-width: 760px)').matches && !sidebarOpen && !selecting && !document.querySelector('dialog[open]'),
+      enabled: () => !!window.matchMedia?.('(max-width: 760px)').matches && !sidebarOpen && !selecting && !document.querySelector('dialog[open]:not([data-swipe-preview])'),
+      width: () => Math.min(310, window.innerWidth * 0.86),
+      progress: (value) => { sidebarPull = value; },
       open: () => { sidebarOpen = true; },
     }}>
       <header class="workspace-header">
@@ -1389,7 +1491,7 @@
             placeholder="Search your wall"
             aria-label="Search your wall"
             list="search-tag-suggestions"
-          />{#if searching}<span class="tiny-spinner" aria-label="Searching"
+          />{#if searching || semanticBusy}<span class="tiny-spinner" aria-label="Searching"
             ></span>{:else if query}<button
               class="icon-button"
               aria-label="Clear search"
@@ -1465,6 +1567,29 @@
           {#each selectedFilterTags as tag}<button class="filter-tag" aria-label={`Remove filter ${tag}`}
             onclick={() => removeTagFilter(tag)}>#{tag}<Icon name="close" size={12} /></button>{/each}
         </div>{/if}
+      {#if query.trim() && embeddingPreferences.enabled}
+        <div class="semantic-controls">
+          <div class="search-options" role="group" aria-label="Search mode">
+            {#each [{ value: 'exact', label: 'Exact' }, { value: 'smart', label: 'Smart' }, { value: 'vector', label: 'Vector only' }] as mode}
+              <button class:active={searchMode === mode.value} aria-pressed={searchMode === mode.value} disabled={tagSearch} onclick={() => searchMode = mode.value as SearchMode}>{mode.label}</button>
+            {/each}
+          </div>
+          {#if !tagSearch && searchMode !== 'exact'}
+            <div class="search-options" role="group" aria-label="Result order">
+              <button class:active={searchOrder === 'ordered'} aria-pressed={searchOrder === 'ordered'} onclick={() => { searchOrder = 'ordered'; void scrollSearchResults(); }}>Ordered</button>
+              <button class:active={searchOrder === 'relevant'} aria-pressed={searchOrder === 'relevant'} onclick={() => { searchOrder = 'relevant'; void scrollSearchResults(); }}>Relevant</button>
+            </div>
+            {#if searchOrder === 'ordered'}
+              <label class="similarity-control" title="Relative relevance within these results. Higher values keep fewer, stronger matches.">Similarity threshold <input type="range" min="0" max="1" step="0.01" bind:value={similarityThreshold} aria-label="Similarity threshold" /><output>{similarityThreshold.toFixed(2)}</output></label>
+            {/if}
+            <div class="semantic-actions">
+              <label class="omit-video"><input type="checkbox" bind:checked={omitVideo} />Omit video</label>
+              <button class="icon-button" aria-label="Refresh search results" title="Refresh search results" disabled={semanticBusy} onclick={() => scheduleSemanticSearch(semanticRevision, true, query, searchAllSpaces, selectedSpace, omitVideo, true)}><Icon name="sync" size={16} /></button>
+            </div>
+          {/if}
+        </div>
+        {#if semanticNotice && effectiveSearchMode !== 'exact'}<p class="semantic-status" role="status">{semanticNotice}</p>{/if}
+      {/if}
       {#if tagSearch && (searchTags.length || !selectedFilterTags.length)}<div class="search-tags" aria-label="Matching tags">
           {#if searchTags.length}
             <span>Tags</span>
@@ -1546,13 +1671,7 @@
                   ><Icon name="plus" size={17} />Write your first memo</button
                 >{/if}
             </div>{/if}
-          {#if visibleMemos.length > renderedMemos.length}<button
-              class="load-more"
-              onclick={showMore}
-              >{query
-                ? `Show more results · ${visibleMemos.length - renderedMemos.length} remaining`
-                : 'Load older memos'}</button
-            >{/if}
+          {#if !query && visibleMemos.length > renderedMemos.length}<button class="load-more" onclick={showMore}>Load older memos</button>{/if}
           {#each renderedMemos as memo, index (memo.id)}
             {@const preview =
               previewTick >= 0 ? memoPreview(memo.body) : undefined}
@@ -1583,7 +1702,8 @@
                     memo.spaceId,
                   ) ?? 'Unknown space'}
                 </div>{/if}
-              {#if memo.body && !hideMemoBody(memo.body, preview)}<MemoBody body={memo.body} />{/if}
+              {#if memo.body && !hideMemoBody(memo.body, preview)}<MemoBody body={memo.body}
+                  ontaskchange={editing?.id === memo.id ? undefined : (marker, completed) => changeMemoTask(memo, marker, completed)} />{/if}
               {#if preview}<a
                   class="link-preview"
                   href={preview.url}
@@ -1714,6 +1834,7 @@
               </footer>
             </article>
           {/each}
+          {#if query && visibleMemos.length > renderedMemos.length}<button class="load-more" onclick={showMore}>Show more results · {visibleMemos.length - renderedMemos.length} remaining</button>{/if}
         </div>
       </div>
       {#if showScrollBottom}<button class="scroll-bottom" aria-label="Scroll to bottom" title="Scroll to bottom"
@@ -1850,11 +1971,8 @@
   </div>
 {/if}
 
-{#if sidebarOpen}<Dialog
-    title="Your spaces"
-    drawer
-    onclose={() => (sidebarOpen = false)}>{@render navigation()}</Dialog
-  >{/if}
+{#if authChecked}<SpacesDrawer open={sidebarOpen} pull={sidebarPull}
+    onclose={() => { sidebarOpen = false; sidebarPull = undefined; }}>{@render navigation()}</SpacesDrawer>{/if}
 {#if installHelpOpen}<Dialog title="Install Scratchwall" onclose={() => (installHelpOpen = false)}>
     <p class="dialog-description">Keep Scratchwall close with its own app icon and window.</p>
     {#if installPrompt}<button class="primary" onclick={installApp} disabled={installing}>
@@ -1950,6 +2068,10 @@
         <dd><kbd>↑</kbd><kbd>↓</kbd></dd>
       </div>
       <div>
+        <dt>Browse photos and videos in a preview</dt>
+        <dd><kbd>←</kbd><kbd>→</kbd></dd>
+      </div>
+      <div>
         <dt>Reorder a focused space</dt>
         <dd><kbd>Alt</kbd><kbd>↑ / ↓</kbd></dd>
       </div>
@@ -1989,6 +2111,7 @@
         <span>Enter sends a memo<small>Shift + Enter adds a new line. Turn off to send with Ctrl / ⌘ + Enter.</small></span>
       </label>
     </div>
+    <EmbeddingSettings settings={embeddingPreferences} eta={embeddingEta} onchange={value => embeddingPreferences = value} />
     <div class="settings-section">
       <h3>Your device</h3>
       <p class="dialog-description">
@@ -2025,15 +2148,16 @@
         ></a
       >
     </div>
-    <Changelog {previousVersion} />
-    <AgentSettings {spaces} subject={profile?.subject ?? ''} />
     <div class="settings-section">
       <button class="settings-action danger" onclick={signOut}
         ><Icon name="logout" size={18} /><span
           >Log out<small>Clears this device's local data</small></span
         ></button
       >
-    </div></Dialog
+    </div>
+    <AgentSettings {spaces} subject={profile?.subject ?? ''} />
+    <Changelog {previousVersion} />
+    </Dialog
   >{/if}
 {#if pwaNeedsRefresh}<div class="pwa-toast" role="status">
     <Icon name="sync" size={19} /><span>A fresh version is ready</span><button
@@ -2049,7 +2173,8 @@
 
 {#if previewAttachment}
   <MediaPreview
-    attachment={previewAttachment}
+    bind:attachment={previewAttachment}
+    gallery={previewGallery}
     onclose={() => (previewAttachment = undefined)}
     oncached={() => {
       void refresh();

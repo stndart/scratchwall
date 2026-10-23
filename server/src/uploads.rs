@@ -336,6 +336,7 @@ pub async fn complete(
         .await?;
     sqlx::query("INSERT INTO changes(user_id,seq,entity_type,entity_id,operation,payload_json) VALUES(?,?,'attachment',?,'upsert',?)")
         .bind(user.user_id).bind(seq).bind(&id).bind(serde_json::to_string(&attachment)?).execute(&mut *transaction).await?;
+    crate::embeddings::enqueue_memo(&mut transaction, user.user_id, &attachment.memo_id).await?;
     transaction.commit().await?;
     let _ = tokio::fs::remove_file(&temp_path).await;
     let _ = state.changes.send(ChangeNotice {
@@ -475,6 +476,7 @@ mod tests {
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
             ingest_token_hash: None,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         };
         let (changes, _) = tokio::sync::broadcast::channel(8);
         (

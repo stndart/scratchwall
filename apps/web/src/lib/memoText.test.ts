@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstMemoUrl, inlineParts, memoBlocks } from './memoText';
+import { firstMemoUrl, inlineParts, memoBlocks, setMemoTask } from './memoText';
 
 describe('memo code fences', () => {
   it('preserves code whitespace and separates surrounding text and multiple snippets', () => {
@@ -37,6 +37,70 @@ describe('memo code fences', () => {
       { type: 'text', value: '```unfinished ' },
       { type: 'code', value: 'inline' },
     ]);
+  });
+});
+
+describe('memo task lists', () => {
+  it('groups consecutive tasks and keeps surrounding prose and blank lines', () => {
+    expect(memoBlocks('Before\n- [ ] Pending\n- [x] Done\n\n- [X] Also done\nAfter')).toMatchObject([
+      { type: 'text', value: 'Before\n' },
+      { type: 'tasks', items: [
+        { value: 'Pending', completed: false },
+        { value: 'Done', completed: true },
+      ] },
+      { type: 'text', value: '\n' },
+      { type: 'tasks', items: [{ value: 'Also done', completed: true }] },
+      { type: 'text', value: 'After' },
+    ]);
+  });
+
+  it('accepts Markdown bullet markers, indentation, empty labels and Windows newlines', () => {
+    expect(memoBlocks('  * [ ] One\r\n+\t[X]\tTwo\r\n- [ ]\r\n- [x]')).toMatchObject([
+      { type: 'tasks', items: [
+        { value: 'One', completed: false },
+        { value: 'Two', completed: true },
+        { value: '', completed: false },
+        { value: '', completed: true },
+      ] },
+    ]);
+  });
+
+  it('leaves ordinary bullets, escaped markers, invalid checkboxes and inline examples literal', () => {
+    const body = '- plain list\n\\- [ ] Escaped\n- [y] Invalid\n- [] Missing space\n- [x]Missing separator\nMention - [ ] inline\n`- [x] inline code`';
+    expect(memoBlocks(body)).toEqual([{ type: 'text', value: body }]);
+  });
+
+  it('keeps task syntax inside fenced code literal and resumes tasks after the fence', () => {
+    expect(memoBlocks('- [ ] Before\n```text\n- [x] Literal\n```\n- [X] After')).toMatchObject([
+      { type: 'tasks', items: [{ value: 'Before', completed: false }] },
+      { type: 'code', language: 'text', value: '- [x] Literal\n' },
+      { type: 'tasks', items: [{ value: 'After', completed: true }] },
+    ]);
+    expect(memoBlocks('```code```- [ ] Same line')).toEqual([
+      { type: 'code', language: undefined, value: 'code' },
+      { type: 'text', value: '- [ ] Same line' },
+    ]);
+    expect(memoBlocks('- [ ] Before ```code```')).toEqual([
+      { type: 'text', value: '- [ ] Before ' },
+      { type: 'code', language: undefined, value: 'code' },
+    ]);
+  });
+
+  it('finds preview links in tasks while excluding code and keeping document order', () => {
+    const body = '- [ ] `https://inline.test`\n- [x] **https://task.test**\nAfter https://after.test';
+    expect(firstMemoUrl(body)).toBe('https://task.test');
+    expect(firstMemoUrl('Before https://before.test\n' + body)).toBe('https://before.test');
+  });
+
+  it('changes only the chosen task marker, preserving duplicate labels, formatting and line endings', () => {
+    const source = 'Before\r\n  * [ ] Same **label**\r\n```text\r\n- [ ] Same **label**\r\n```\r\n+ [X]\tSame **label**\r\n';
+    const tasks = memoBlocks(source).flatMap((block) => block.type === 'tasks' ? block.items : []);
+    expect(tasks.map((task) => source[task.marker])).toEqual([' ', 'X']);
+    expect(setMemoTask(source, tasks[0].marker, true)).toBe(source.replace('  * [ ]', '  * [x]'));
+    expect(setMemoTask(source, tasks[1].marker, false)).toBe(source.replace('+ [X]', '+ [ ]'));
+    expect(setMemoTask(source, tasks[1].marker, true)).toBe(source);
+    expect(setMemoTask(source, source.indexOf('- [ ]') + 3, true)).toBe(source);
+    expect(setMemoTask(source, -1, true)).toBe(source);
   });
 });
 

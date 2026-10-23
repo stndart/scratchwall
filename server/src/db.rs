@@ -8,6 +8,22 @@ use std::{path::Path, str::FromStr};
 use uuid::Uuid;
 
 pub async fn connect(data_dir: &Path) -> Result<SqlitePool> {
+    static EXTENSION: std::sync::Once = std::sync::Once::new();
+    EXTENSION.call_once(|| {
+        // sqlite-vec's documented static registration; initialize before opening connections.
+        unsafe {
+            libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut libsqlite3_sys::sqlite3,
+                    *mut *mut std::ffi::c_char,
+                    *const libsqlite3_sys::sqlite3_api_routines,
+                ) -> std::ffi::c_int,
+            >(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+    });
     tokio::fs::create_dir_all(data_dir.join("blobs")).await?;
     tokio::fs::create_dir_all(data_dir.join("uploads")).await?;
     let url = format!(
@@ -16,6 +32,7 @@ pub async fn connect(data_dir: &Path) -> Result<SqlitePool> {
     );
     let options = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
+        .busy_timeout(std::time::Duration::from_secs(10))
         .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
@@ -212,6 +229,7 @@ CREATE TABLE IF NOT EXISTS link_previews (
 );
 "#).execute(pool).await?;
     add_auth_flow_return_path(pool).await?;
+    crate::embeddings::migrate(pool).await?;
     Ok(())
 }
 

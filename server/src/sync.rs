@@ -54,7 +54,11 @@ pub async fn sync(
     let mut files_to_delete: Vec<PathBuf> = Vec::new();
     let mut did_change = false;
 
+    let mut changed_memos = std::collections::HashSet::new();
     for operation in input.operations {
+        if matches!(operation.kind.as_str(), "upsert_memo" | "delete_memo") {
+            changed_memos.insert(operation.entity_id.clone());
+        }
         let inserted = sqlx::query(
             "INSERT OR IGNORE INTO processed_ops(user_id,op_id,created_at) VALUES(?,?,unixepoch())",
         )
@@ -265,6 +269,13 @@ pub async fn sync(
         }
     }
 
+    for id in changed_memos {
+        crate::embeddings::enqueue_memo(&mut transaction, user.user_id, &id).await?;
+    }
+    if did_change {
+        sqlx::query("DELETE FROM embedding_sources WHERE user_id=? AND memo_id IN (SELECT m.id FROM memos m JOIN spaces s ON s.user_id=m.user_id AND s.id=m.space_id WHERE m.user_id=? AND (m.deleted=1 OR s.deleted=1))")
+            .bind(user.user_id).bind(user.user_id).execute(&mut *transaction).await?;
+    }
     let limit = input.limit.unwrap_or(1000).clamp(1, 1000);
     let rows = sqlx::query("SELECT seq,entity_type,entity_id,operation,payload_json FROM changes WHERE user_id=? AND seq>? ORDER BY seq LIMIT ?")
         .bind(user.user_id).bind(input.cursor).bind(limit).fetch_all(&mut *transaction).await?;
@@ -344,6 +355,7 @@ mod tests {
             session_key: [0; 32],
             max_attachment_bytes: 1024,
             ingest_token_hash: None,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         });
         let (sender, _) = tokio::sync::broadcast::channel(8);
         let state = AppState {

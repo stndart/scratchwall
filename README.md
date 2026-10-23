@@ -53,6 +53,63 @@ DATA_DIR=./data cargo run --manifest-path server/Cargo.toml -- \
 
 The output is created with mode 0600 on Unix and refuses to overwrite an existing file. This command requires the server's private `.env` and access to its database; regular users should use Settings.
 
+## Optional semantic search
+
+Embeddings are disabled per account by default. The optional CPU worker uses pinned
+multilingual E5 Base for text and SigLIP 2 Large for images and sampled video frames.
+Content stays on your Scratchwall/worker hosts. Text is chunked with overlap; videos
+use up to 32 evenly distributed frames (roughly one per five seconds for short clips).
+Images also get lightweight Russian/English Tesseract OCR, embedded through E5 in a separate resumable job. Extracted captions never enter memo text or Exact search. Audio transcription and document-body extraction are not included.
+
+1. Generate a random `EMBEDDING_TOKEN` of at least 32 characters, e.g. with `openssl rand -hex 32`, and put it in private `.env`.
+2. Set `EMBEDDING_URL=http://embeddings:8090` in `.env`.
+3. Run `docker compose --profile embeddings up -d --build`. First startup downloads the pinned model weights into the persistent `embedding-models` volume; allow several minutes and several GB of disk/RAM. Defaults limit the worker to two CPUs, two inference threads and 8 GiB RAM. Adjust `EMBEDDING_CPUS`, `EMBEDDING_THREADS`, and `EMBEDDING_MEMORY` for your host.
+4. In Settings → Smart search, enable embeddings for your account. Existing memos in every space are queued within 30 seconds; synced edits/uploads and Telegram captures enqueue automatically. Settings shows indexing state, completeness and a recent-throughput ETA (a memo can have several sources).
+
+For a worker on another host such as milu, run the same image with persistent
+`HF_HOME=/models`, `SCRATCHWALL_URL` pointing to Scratchwall, and the same
+`EMBEDDING_TOKEN`. Set the server's `EMBEDDING_URL` to the worker's private URL on
+port 8090. Both hosts must reach each other; use your private network or TLS.
+The worker fetches only the files of jobs it has claimed; it never opens SQLite.
+If your local Compose override replaces service networks, connect both services to
+a common private network. Do not expose port 8090 publicly.
+
+Search mode and ordering are independent:
+
+- **Exact** preserves local substring search and newest-first bump/creation-time ordering, including offline edits.
+- **Smart** keeps all exact hits and adds semantic candidates. **Vector only** uses semantic candidates alone.
+- **Ordered** uses the newest-first bump/creation-time order and shows a 0.00–1.00 similarity-threshold slider. The threshold filters semantic hits only; Smart always keeps exact hits.
+- **Relevant** hides the slider and uses embedding rank fusion, with exact hits boosted in Smart and bump time breaking ties. It uses all returned semantic candidates, independently of the Ordered threshold.
+
+The similarity slider is a relative relevance cutoff within the returned candidates:
+0 keeps all, 1 keeps the strongest result. It uses the same fused ranking as Relevant,
+so small slider changes progressively narrow results instead of exposing tied cosine
+scores in large jumps. It is not a probability. Search returns up to 500 memo
+candidates per model family, grouping chunks/frames per memo before limiting.
+**Omit video** excludes memos containing video attachments in Smart and Vector only,
+before server candidate limits. Search results start at the top and append more
+results below; the regular wall keeps its original direction. Indexing progress does
+not rerun a search; use the refresh icon to include newly indexed content.
+Pipeline upgrades automatically restart reconciliation and never mix vector versions.
+Current-space/all-space scope and literal `#tag` filtering retain their behavior.
+Unsynced content becomes available semantically after upload/indexing; local exact
+matches stay immediately available in Smart.
+
+Pause heavy work with `docker compose stop embeddings`; restart with
+`docker compose --profile embeddings up -d embeddings`. Jobs, per-chunk/frame
+checkpoints and vectors persist in SQLite. Expired five-minute leases are reclaimed.
+The backfill cursor survives restarts, and an hourly repair pass catches missing work.
+Duplicate deliveries cannot duplicate vectors or overwrite edits. Transient failures
+retry with backoff up to five attempts; after fixing the underlying problem,
+requeue failures with the server stopped using
+`UPDATE embedding_jobs SET state='pending',attempts=0,retry_at=0 WHERE state='failed';`.
+Stopping the worker also stops query embedding: Smart falls back to exact hits with
+an availability notice and Vector only reports unavailability. Turning off embeddings
+in account Settings instead cancels work and deletes that account's derived index.
+
+Worker checks: `python3 -m unittest discover -s services/embeddings -p 'test_*.py'`.
+The unit tests use fake inference and do not download weights.
+
 ## Development
 
 Node 24+, pnpm 11+, Rust 1.97+. Commands run from the repo root:
@@ -87,11 +144,13 @@ Android project files are generated locally. Keep release keystores/properties o
 
 Persistent server state lives in `data/` (or `DATA_PATH`). To back up consistently, stop the container, archive that directory, then start it. Restore into an empty data directory while stopped. Preserve the session encryption key; losing it invalidates encrypted provider credentials. Notes/files are not end-to-end encrypted; protect server storage and device accounts. Attachments are limited to 2 GiB; browser quotas may be lower.
 
-Choose **Install Scratchwall** in the sidebar, mobile spaces drawer, or Settings. Supported browsers open an install prompt; others show installation steps. **Ctrl/Cmd+K** searches, **N** focuses the composer, **Enter** saves, **Shift+Enter** adds a line, and **?** shows shortcuts. Settings can change Enter behavior. Memos support bold, italics, inline code and fenced code with a Copy button; other Markdown stays literal. Click a tag in the sidebar to search across spaces. Drafts are per-space and remain only while the app is open.
+Choose **Install Scratchwall** in the sidebar, mobile spaces drawer, or Settings. Supported browsers open an install prompt; others show installation steps. **Ctrl/Cmd+K** searches, **N** focuses the composer, **Enter** saves, **Shift+Enter** adds a line, and **?** shows shortcuts. Settings can change Enter behavior. Memos support bold, italics, inline code, fenced code with a Copy button, and task lists (`- [ ]` pending, `- [x]` completed); other Markdown stays literal. Click a task checkbox to save its completion on this device and sync it across devices. While editing a memo, change its task markers in the editor. Click a tag in the sidebar to search across spaces. Drafts are per-space and remain only while the app is open.
 
-On mobile, swipe right across the wall to open spaces, then hold a space and drag to reorder it. On desktop, drag a space's grip. Keyboard users can focus a space and press **Alt+↑/↓**, or focus its grip and use **↑/↓**. Ordering is saved offline and synced across devices, including Inbox.
+On mobile, pull right across the wall to slide spaces open; release a short pull to slide them closed. Hold a space and drag to reorder it; other spaces slide aside as you move. On desktop, drag a space's grip. Keyboard users can focus a space and press **Alt+↑/↓**, or focus its grip and use **↑/↓**. Ordering is saved offline and synced across devices, including Inbox.
 
 Click a memo's tag to filter within its space. Select more suggested tags or enter a query such as `#Reading #Important` to require all of them. The composer remains available in the current space, and each new memo inherits the filters. Choosing **All spaces** hides the composer. The down-arrow shortcut appears when you scroll far enough above the bottom. On mobile, sending a memo dismisses the keyboard; entering a tag keeps the tag field focused.
+
+In a photo or video preview, use **←/→** or the arrow buttons to browse media across the whole space in memo order. The gallery includes older memos and items outside the current search; opening a search result uses that memo's space. Navigation stops at the first and last item.
 
 Hold a memo's surrounding area (or the desktop feed margin beside it) for a moment, then drag to select a range. Dragging back shrinks the range; starting on a selected memo removes that range from the selection. In selection mode, short clicks or taps toggle memos. Text selection, links, attachment controls, and code-copy buttons keep their usual behavior. **Space** toggles a focused memo; **Esc** exits selection mode.
 

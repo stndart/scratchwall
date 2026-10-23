@@ -1,3 +1,6 @@
+import { compareMemoOrder } from './memoActions';
+import type { Attachment, Memo } from './types';
+
 const THUMBNAIL_SIZE = 960;
 
 export async function createThumbnail(file: File): Promise<string | undefined> {
@@ -37,10 +40,23 @@ export function isVideoMime(mimeType: string): boolean {
   return mime.startsWith('video/') || mime === 'application/mp4';
 }
 
+export function isPreviewableMedia(attachment: { mimeType: string }): boolean {
+  return attachment.mimeType.trim().toLowerCase().startsWith('image/') || isVideoMime(attachment.mimeType);
+}
+
+export function spaceMedia(memos: Memo[], attachments: Attachment[], spaceId: string): Attachment[] {
+  const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+  return memos
+    .filter((memo) => memo.spaceId === spaceId)
+    .sort(compareMemoOrder)
+    .flatMap((memo) => memo.attachmentIds.flatMap((id) => {
+      const attachment = byId.get(id);
+      return attachment && isPreviewableMedia(attachment) ? [attachment] : [];
+    }));
+}
+
 export function isVisualPreview(attachment: { mimeType: string; thumbnail?: string }): boolean {
-  return Boolean(attachment.thumbnail) && (
-    attachment.mimeType.startsWith('image/') || isVideoMime(attachment.mimeType)
-  );
+  return Boolean(attachment.thumbnail) && isPreviewableMedia(attachment);
 }
 
 export function isAttachmentCached(cacheState: 'local' | 'cached' | 'remote' | 'error'): boolean {
@@ -52,4 +68,3 @@ export function attachmentStatusLabel(cacheState: 'local' | 'cached' | 'remote' 
   if (cacheState === 'error') return 'Upload failed';
   return cacheState;
 }
-

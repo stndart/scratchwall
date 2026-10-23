@@ -642,6 +642,7 @@ async fn commit_ingest_inner(
         .bind(&space.id)
         .execute(&mut *transaction)
         .await?;
+    crate::embeddings::enqueue_memo(&mut transaction, user_id, &memo.id).await?;
     transaction.commit().await?;
     let _ = state.changes.send(ChangeNotice { user_id });
     tracing::info!(user_id, memo_id = %memo.id, space = %space.name, files = prepared.len(), "ingest complete");
@@ -793,6 +794,7 @@ mod tests {
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
             ingest_token_hash,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         }
     }
 

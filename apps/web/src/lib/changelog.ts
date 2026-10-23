@@ -6,6 +6,27 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.10.23',
+    changes: [
+      'Smart search',
+    ],
+  },
+  {
+    version: '2026.10.19',
+    changes: ['Browse photos and videos across a whole space with preview arrow buttons or the left and right keys.'],
+  },
+  {
+    version: '2026.10.16.2',
+    changes: [
+      'Click task checkboxes to save completion and sync it across devices.',
+      'The spaces drawer follows your swipe, and spaces slide smoothly while reordering.',
+    ],
+  },
+  {
+    version: '2026.10.16.1',
+    changes: ['Render Markdown task lists with unchecked and completed items.'],
+  },
+  {
     version: '2026.10.16',
     changes: [
       'Write in the current space while filtering by tags; new memos inherit every selected tag.',

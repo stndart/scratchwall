@@ -6,6 +6,44 @@ import MemoBody from './MemoBody.svelte';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('memo body rendering', () => {
+  it('renders task states as labeled, read-only checkboxes in a list', () => {
+    const view = render(MemoBody, { body: 'Before\n- [ ] Pending\n- [x] Done\n- [X] Also done\nAfter' });
+    const checkboxes = view.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(checkboxes.map((checkbox) => checkbox.checked)).toEqual([false, true, true]);
+    expect(checkboxes.every((checkbox) => checkbox.disabled)).toBe(true);
+    expect(view.getByRole('checkbox', { name: 'Pending' })).toBe(checkboxes[0]);
+    expect(view.getByRole('checkbox', { name: 'Done' })).toBe(checkboxes[1]);
+    expect(view.getAllByRole('listitem')).toHaveLength(3);
+    expect(view.container.querySelectorAll('.memo-task.completed')).toHaveLength(2);
+    expect(view.getByText('Before')).toBeTruthy();
+    expect(view.getByText('After')).toBeTruthy();
+    expect(view.container.textContent).not.toContain('- [');
+  });
+
+  it('formats task labels, escapes HTML and leaves task examples inside code literal', () => {
+    const view = render(MemoBody, { body: '- [ ] **Bold** *italic* `code` https://example.com <img src=x>\n```text\n- [x] Fenced example\n```\n`- [ ] Inline example`' });
+    expect(view.getAllByRole('checkbox')).toHaveLength(1);
+    const item = view.getByRole('listitem');
+    expect(item.querySelector('strong')?.textContent).toBe('Bold');
+    expect(item.querySelector('em')?.textContent).toBe('italic');
+    expect(item.querySelector('code')?.textContent).toBe('code');
+    expect(item.querySelector('a')?.getAttribute('href')).toBe('https://example.com');
+    expect(item.textContent).toContain('<img src=x>');
+    expect(item.querySelector('img')).toBeNull();
+    expect(view.getByLabelText('text code snippet').textContent).toBe('- [x] Fenced example\n');
+    expect(view.getByText('- [ ] Inline example').tagName).toBe('CODE');
+  });
+
+  it('updates rendered task state when the memo text changes', async () => {
+    const view = render(MemoBody, { body: '- [ ] Task' });
+    await view.rerender({ body: '- [x] Task' });
+    expect((view.getByRole('checkbox', { name: 'Task' }) as HTMLInputElement).checked).toBe(true);
+    expect(view.getByRole('listitem').classList.contains('completed')).toBe(true);
+    await view.rerender({ body: '- ordinary bullet' });
+    expect(view.queryByRole('checkbox')).toBeNull();
+    expect(view.container.textContent).toContain('- ordinary bullet');
+  });
+
   it('copies only the chosen raw code block, including whitespace and literal HTML', async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal('navigator', { clipboard: { writeText } });

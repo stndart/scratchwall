@@ -251,6 +251,7 @@ mod tests {
             session_key: [0; 32],
             max_attachment_bytes: 1024,
             ingest_token_hash: None,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         };
         let (changes, _) = tokio::sync::broadcast::channel(8);
         let state = AppState {

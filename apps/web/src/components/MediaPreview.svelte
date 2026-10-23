@@ -6,14 +6,40 @@
   import { getAttachment, putAttachment } from '../lib/repository';
   import { downloadAttachment } from '../lib/api';
   import { formatBytes, isVideoMime } from '../lib/media';
+  import { isTypingTarget } from '../lib/clipboard';
 
   export let attachment: Attachment;
+  export let gallery: Attachment[] = [];
   export let onclose: () => void;
   export let oncached: () => void;
   let url = '';
   let error = '';
   let loading = true;
   let playbackError = '';
+  let mounted = false;
+  let loadVersion = 0;
+  $: galleryIndex = gallery.findIndex((item) => item.id === attachment.id);
+  $: hasGallery = galleryIndex >= 0 && gallery.length > 1;
+  $: if (mounted) void loadAttachment(attachment);
+
+  function navigate(direction: number) {
+    const next = galleryIndex + direction;
+    if (galleryIndex >= 0 && next >= 0 && next < gallery.length)
+      attachment = gallery[next];
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (
+      !hasGallery || event.defaultPrevented || event.isComposing ||
+      event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+      isTypingTarget(event.target)
+    ) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    event.stopPropagation();
+    navigate(event.key === 'ArrowRight' ? 1 : -1);
+  }
+
   function mediaFailed(event: Event) {
     const video = event.currentTarget as HTMLVideoElement;
     playbackError = video.error?.code === 3
@@ -21,35 +47,41 @@
       : 'This browser could not play the video format. Download it to play in another app.';
   }
 
-  onMount(() => {
-    let active = true;
-    void (async () => {
-      try {
-        let blob = (await getAttachment(attachment.id))?.blob;
-        if (!blob) {
-          blob = await downloadAttachment(attachment.id);
-          await putAttachment(
-            { ...attachment, cacheState: 'cached', remoteReady: true },
-            blob,
-          );
-          oncached();
-        }
-        if (active)
-          url = URL.createObjectURL(
-            new Blob([blob], { type: attachment.mimeType }),
-          );
-      } catch (value) {
-        if (active)
-          error =
-            value instanceof Error
-              ? value.message
-              : 'Could not open this file. Connect to download it.';
-      } finally {
-        if (active) loading = false;
+  async function loadAttachment(current: Attachment) {
+    const version = ++loadVersion;
+    if (url) URL.revokeObjectURL(url);
+    url = '';
+    error = '';
+    playbackError = '';
+    loading = true;
+    try {
+      let blob = (await getAttachment(current.id))?.blob;
+      if (!blob) {
+        blob = await downloadAttachment(current.id);
+        await putAttachment(
+          { ...current, cacheState: 'cached', remoteReady: true },
+          blob,
+        );
+        oncached();
       }
-    })();
+      if (version === loadVersion)
+        url = URL.createObjectURL(new Blob([blob], { type: current.mimeType }));
+    } catch (value) {
+      if (version === loadVersion)
+        error = value instanceof Error
+          ? value.message
+          : 'Could not open this file. Connect to download it.';
+    } finally {
+      if (version === loadVersion) loading = false;
+    }
+  }
+
+  onMount(() => {
+    mounted = true;
+    window.addEventListener('keydown', handleKeydown, true);
     return () => {
-      active = false;
+      loadVersion += 1;
+      window.removeEventListener('keydown', handleKeydown, true);
       if (url) URL.revokeObjectURL(url);
     };
   });
@@ -71,7 +103,26 @@
     {:else}<img src={url} alt={attachment.filename} />{/if}
   </div>
   <div class="media-footer">
-    <span>{#if playbackError}<span role="alert">{playbackError}</span>{:else}{formatBytes(attachment.size)}{/if}</span>{#if url}<a
+    <div class="media-details">
+      {#if hasGallery}<div class="media-navigation" role="group" aria-label="Space gallery">
+          <button
+            class="icon-button media-previous"
+            type="button"
+            aria-label="Previous photo or video"
+            title="Previous (←)"
+            disabled={galleryIndex === 0}
+            onclick={() => navigate(-1)}><Icon name="chevron" /></button>
+          <span class="media-position" role="status">{galleryIndex + 1} / {gallery.length}</span>
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="Next photo or video"
+            title="Next (→)"
+            disabled={galleryIndex === gallery.length - 1}
+            onclick={() => navigate(1)}><Icon name="chevron" /></button>
+        </div>{/if}
+      <span>{#if playbackError}<span role="alert">{playbackError}</span>{:else}{formatBytes(attachment.size)}{/if}</span>
+    </div>{#if url}<a
         class="secondary"
         href={url}
         download={attachment.filename}

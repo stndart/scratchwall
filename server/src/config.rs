@@ -16,6 +16,7 @@ pub struct Config {
     pub session_key: [u8; 32],
     pub max_attachment_bytes: u64,
     pub ingest_token_hash: Option<String>,
+    pub embeddings: crate::embeddings::EmbeddingConfig,
 }
 
 impl Config {
@@ -71,6 +72,7 @@ impl Config {
                 .ok()
                 .filter(|value| !value.is_empty())
                 .map(|value| hex::encode(sha2::Sha256::digest(value.as_bytes()))),
+            embeddings: crate::embeddings::EmbeddingConfig::from_env(),
         })
     }
 }

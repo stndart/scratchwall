@@ -2,6 +2,7 @@ services:
   scratchwall:
     build: .
     image: scratchwall:local
+    networks: [default]
     restart: unless-stopped
     env_file: .env
     environment:
@@ -18,3 +19,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  embeddings:
+    profiles: [embeddings]
+    build: ./services/embeddings
+    restart: unless-stopped
+    init: true
+    environment:
+      SCRATCHWALL_URL: http://scratchwall:8080
+      EMBEDDING_TOKEN: ${EMBEDDING_TOKEN:-}
+      EMBEDDING_THREADS: ${EMBEDDING_THREADS:-2}
+    volumes:
+      - embedding-models:/models
+    cpus: ${EMBEDDING_CPUS:-2}
+    mem_limit: ${EMBEDDING_MEMORY:-8g}
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+
+volumes:
+  embedding-models:

@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
-import type { Memo, Space } from './lib/types';
+import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/svelte';
+import type { Attachment, Memo, Space } from './lib/types';
 import App from './App.svelte';
 import { tick } from 'svelte';
 import MediaPreview from './components/MediaPreview.svelte';
 import { getAttachment } from './lib/repository';
-import { downloadAttachment } from './lib/api';
+import { downloadAttachment, embeddingSettings, semanticSearch } from './lib/api';
 import { SearchIndex } from './lib/search';
 import { currentVersion } from './lib/changelog';
 
 const state = vi.hoisted(() => ({
   memos: [] as Memo[],
   spaces: [] as Space[],
+  attachments: [] as Attachment[],
   putMemo: vi.fn(),
   putAttachment: vi.fn(),
   offline: false,
@@ -59,6 +60,8 @@ vi.mock('./lib/api', () => ({
   me: () => state.me(),
   syncUntilCaughtUp: vi.fn(),
   uploadPendingAttachments: vi.fn(),
+  embeddingSettings: vi.fn(async () => ({ enabled: false, configured: false, pending: 0, running: 0, done: 0, failed: 0, total: 0, completeness: 0 })),
+  semanticSearch: vi.fn(),
   UnauthorizedError: class extends Error {},
 }));
 vi.mock('./lib/nativeAuth', () => ({
@@ -100,6 +103,13 @@ function makeMemo(id: string): Memo {
     syncState: 'synced',
   };
 }
+function makeAttachment(id: string, memoId: string, mimeType = 'image/png'): Attachment {
+  return {
+    id, memoId, filename: `${id}.${mimeType === 'image/png' ? 'png' : 'mp4'}`, mimeType,
+    size: 12, thumbnail: mimeType === 'image/png' ? 'data:image/png;base64,eA==' : undefined,
+    cacheState: 'cached', remoteReady: true, createdAt: '2026-10-01',
+  };
+}
 function paste(target: HTMLElement, files: File[] = [], text = '') {
   return fireEvent.paste(target, {
     clipboardData: {
@@ -122,6 +132,9 @@ async function openApp() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(embeddingSettings).mockResolvedValue({ enabled: false, configured: false, pending: 0, running: 0, done: 0, failed: 0, total: 0, completeness: 0 });
+  vi.mocked(semanticSearch).mockResolvedValue({ available: true, hits: [] });
+  vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   const storage = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -130,6 +143,7 @@ beforeEach(() => {
     clear: () => storage.clear(),
   });
   state.memos = [];
+  state.attachments = [];
   state.offline = false;
   state.me.mockImplementation(async () => {
     if (state.offline) throw new Error('Offline');
@@ -146,7 +160,7 @@ beforeEach(() => {
   state.getSnapshot.mockImplementation(async () => ({
     memos: state.memos,
     spaces: state.spaces,
-    attachments: [],
+    attachments: state.attachments,
   }));
   state.putMemo.mockImplementation(async (memo: Memo) => {
     state.memos = [...state.memos.filter((item) => item.id !== memo.id), memo];
@@ -176,6 +190,9 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute('open', '');
   };
+  HTMLDialogElement.prototype.show = function () {
+    this.setAttribute('open', '');
+  };
   HTMLDialogElement.prototype.close = function () {
     this.removeAttribute('open');
   };
@@ -189,6 +206,59 @@ afterEach(() => {
 });
 
 describe('web workspace interactions', () => {
+  it('saves the selected task, preserves memo metadata and retains its state after reopening offline', async () => {
+    const memo = { ...makeMemo('checklist'), body: '- [ ] Same\n```text\n- [ ] Same\n```\n- [ ] Same', tags: ['Keep'], attachmentIds: ['file'], bumpedAt: '2026-10-02' };
+    state.memos = [memo];
+    const view = await openApp();
+    const boxes = view.getAllByRole('checkbox', { name: 'Same' }) as HTMLInputElement[];
+    expect(boxes.every((box) => !box.disabled)).toBe(true);
+    await fireEvent.click(boxes[1]);
+    await waitFor(() => expect(state.putMemo).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(boxes[1].checked).toBe(true));
+    expect(state.putMemo.mock.calls[0][0]).toMatchObject({ ...memo, body: expect.any(String), updatedAt: expect.any(String), syncState: 'pending' });
+    const saved = state.putMemo.mock.calls[0][0] as Memo;
+    expect(saved.body).toBe('- [ ] Same\n```text\n- [ ] Same\n```\n- [x] Same');
+    expect(state.putMemo.mock.calls[0][1]).toMatchObject({ kind: 'upsert_memo', entityId: memo.id, payload: saved });
+    expect(boxes[0].checked).toBe(false);
+    view.unmount();
+    state.offline = true;
+    const reopened = await openApp();
+    expect((reopened.getAllByRole('checkbox', { name: 'Same' })[1] as HTMLInputElement).checked).toBe(true);
+    await fireEvent.click(reopened.getAllByRole('checkbox', { name: 'Same' })[1]);
+    await waitFor(() => expect(state.memos[0].body).toBe(memo.body));
+  });
+
+  it('restores a task checkbox when saving fails and preserves the composer draft', async () => {
+    state.memos = [{ ...makeMemo('checklist'), body: '- [ ] Task' }];
+    const view = await openApp();
+    const draft = view.getByRole('textbox', { name: 'Memo text' }) as HTMLTextAreaElement;
+    await fireEvent.input(draft, { target: { value: 'Keep my draft' } });
+    state.putMemo.mockRejectedValueOnce(new Error('Storage full'));
+    const box = view.getByRole('checkbox', { name: 'Task' }) as HTMLInputElement;
+    await fireEvent.click(box);
+    await view.findByText('Storage full');
+    await waitFor(() => expect(box.disabled).toBe(false));
+    expect(box.checked).toBe(false);
+    expect(state.memos[0].body).toBe('- [ ] Task');
+    expect(draft.value).toBe('Keep my draft');
+  });
+
+  it('prevents overlapping task saves in one memo while leaving other memos available', async () => {
+    state.memos = [{ ...makeMemo('one'), body: '- [ ] First\n- [ ] Second' }, { ...makeMemo('two'), body: '- [ ] Other' }];
+    const view = await openApp();
+    let finish!: () => void;
+    state.putMemo.mockImplementationOnce((memo: Memo) => new Promise<void>((resolve) => {
+      finish = () => { state.memos = state.memos.map((item) => item.id === memo.id ? memo : item); resolve(); };
+    }));
+    await fireEvent.click(view.getByRole('checkbox', { name: 'First' }));
+    expect((view.getByRole('checkbox', { name: 'Second' }) as HTMLInputElement).disabled).toBe(true);
+    expect((view.getByRole('checkbox', { name: 'Other' }) as HTMLInputElement).disabled).toBe(false);
+    finish();
+    await waitFor(() => expect((view.getByRole('checkbox', { name: 'Second' }) as HTMLInputElement).disabled).toBe(false));
+    await fireEvent.click(view.getByRole('checkbox', { name: 'Second' }));
+    await waitFor(() => expect(state.memos.find((memo) => memo.id === 'one')?.body).toBe('- [x] First\n- [x] Second'));
+  });
+
   it('composes from a memo tag in the current space, inherits all filters on every send, and hides in all spaces', async () => {
     state.memos = [
       { ...makeMemo('Tagged memo'), tags: ['Reading', 'Important'] },
@@ -278,6 +348,10 @@ describe('web workspace interactions', () => {
     const heading = view.getByRole('heading', { name: /^Inbox/ });
     await fireEvent.touchStart(heading, { touches: [{ clientX: 40, clientY: 100 }] });
     await fireEvent.touchMove(heading, { touches: [{ clientX: 150, clientY: 110 }] });
+    const preview = view.container.querySelector<HTMLDialogElement>('[data-swipe-preview]')!;
+    expect(preview.open).toBe(true);
+    expect(preview.style.transform).toMatch(/translateX\(-\d/);
+    expect(preview.getAttribute('aria-hidden')).toBe('true');
     await fireEvent.touchEnd(heading, { touches: [], changedTouches: [{ clientX: 150, clientY: 110 }] });
     expect(view.getByRole('dialog', { name: 'Your spaces' })).toBeTruthy();
   });
@@ -789,6 +863,70 @@ describe('web media viewer', () => {
     remoteReady: false,
     createdAt: '2026-10-01',
   };
+  it('browses across messages and unrendered older memos with keys and buttons, staying in the space', async () => {
+    state.memos = Array.from({ length: 202 }, (_, index) => makeMemo(`memo-${index.toString().padStart(3, '0')}`));
+    state.memos[0].attachmentIds = ['old'];
+    state.memos[200].attachmentIds = ['photo', 'document', 'clip'];
+    state.memos[201].attachmentIds = ['new'];
+    state.memos.push({ ...makeMemo('other-space'), spaceId: 'ideas', attachmentIds: ['other'] });
+    state.attachments = [
+      makeAttachment('new', 'memo-201'), makeAttachment('other', 'other-space'),
+      makeAttachment('clip', 'memo-200', 'application/mp4'),
+      { ...makeAttachment('document', 'memo-200'), mimeType: 'application/pdf' },
+      makeAttachment('photo', 'memo-200'), makeAttachment('old', 'memo-000'),
+    ];
+    vi.mocked(getAttachment).mockImplementation(async (id) => ({ ...state.attachments.find((item) => item.id === id)!, blob: new Blob([id]) }));
+    const view = await openApp();
+    expect(view.queryByRole('button', { name: 'Open old.png' })).toBeNull();
+    const draft = view.getByRole('textbox', { name: 'Memo text' }) as HTMLTextAreaElement;
+    await fireEvent.input(draft, { target: { value: 'Keep my draft' } });
+    const opener = view.getByRole('button', { name: 'Open photo.png' });
+    opener.focus();
+    await fireEvent.click(opener);
+    const dialog = await view.findByRole('dialog', { name: 'photo.png' });
+    await view.findByText('2 / 4');
+    await fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    await view.findByRole('img', { name: 'old.png' });
+    expect(view.getByText('1 / 4')).toBeTruthy();
+    expect((view.getByRole('button', { name: 'Previous photo or video' }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(view.getByRole('dialog', { name: 'old.png' })).toBe(dialog);
+    await fireEvent.keyDown(dialog, { key: 'ArrowRight' });
+    await within(dialog).findByRole('img', { name: 'photo.png' });
+    await fireEvent.click(view.getByRole('button', { name: 'Next photo or video' }));
+    await waitFor(() => expect(dialog.querySelector('video')?.getAttribute('aria-label')).toBe('clip.mp4'));
+    expect(view.getByText('3 / 4')).toBeTruthy();
+    expect(view.getByRole('link', { name: 'Download' }).getAttribute('download')).toBe('clip.mp4');
+    await fireEvent.keyDown(dialog.querySelector('video')!, { key: 'ArrowRight' });
+    await view.findByText('4 / 4');
+    expect((view.getByRole('button', { name: 'Next photo or video' }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.keyDown(dialog, { key: 'ArrowRight' });
+    expect(view.getByRole('dialog', { name: 'new.png' })).toBe(dialog);
+    expect(downloadAttachment).not.toHaveBeenCalled();
+    await fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(view.queryByRole('group', { name: 'Space gallery' })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(draft.value).toBe('Keep my draft');
+  });
+
+  it('uses a global search result’s own space and includes media outside the search', async () => {
+    state.memos = [
+      { ...makeMemo('inbox-photo'), attachmentIds: ['inbox'] },
+      { ...makeMemo('ideas-one'), spaceId: 'ideas', attachmentIds: ['before'] },
+      { ...makeMemo('ideas-two'), body: 'Needle', spaceId: 'ideas', attachmentIds: ['match'] },
+    ];
+    state.attachments = [makeAttachment('inbox', 'inbox-photo'), makeAttachment('before', 'ideas-one'), makeAttachment('match', 'ideas-two')];
+    vi.mocked(getAttachment).mockImplementation(async (id) => ({ ...state.attachments.find((item) => item.id === id)!, blob: new Blob([id]) }));
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: 'Needle' } });
+    await fireEvent.click(await view.findByRole('button', { name: 'Open match.png' }));
+    await view.findByText('2 / 2');
+    await fireEvent.keyDown(document, { key: 'ArrowLeft' });
+    await view.findByRole('dialog', { name: 'before.png' });
+    expect(view.getByText('1 / 2')).toBeTruthy();
+    expect((view.getByRole('button', { name: 'Previous photo or video' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('opens cached images inside the app and releases the preview URL on close', async () => {
     vi.mocked(getAttachment).mockResolvedValue({
       ...attachment,
@@ -801,6 +939,7 @@ describe('web media viewer', () => {
     });
     const image = await view.findByRole('img', { name: 'photo.png' });
     expect(image.getAttribute('src')).toBe('blob:test');
+    expect(view.queryByRole('group', { name: 'Space gallery' })).toBeNull();
     expect(downloadAttachment).not.toHaveBeenCalled();
     expect(
       view.getByRole('link', { name: 'Download' }).getAttribute('download'),
@@ -832,5 +971,176 @@ describe('web media viewer', () => {
     expect((await view.findByRole('alert')).textContent).toContain(
       'File unavailable offline',
     );
+  });
+
+  it('can leave an unavailable file, clears playback errors, and ignores modified arrow shortcuts', async () => {
+    const video = { ...attachment, id: 'clip', filename: 'clip.mp4', mimeType: 'video/mp4' };
+    const photo = { ...attachment, id: 'last', filename: 'last.png' };
+    vi.mocked(getAttachment).mockImplementation(async (id) => id === attachment.id ? undefined : { ...(id === video.id ? video : photo), blob: new Blob([id]) });
+    vi.mocked(downloadAttachment).mockRejectedValue(new Error('File unavailable offline'));
+    const view = render(MediaPreview, { attachment, gallery: [attachment, video, photo], onclose: vi.fn(), oncached: vi.fn() });
+    await view.findByRole('alert');
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }])
+      await fireEvent.keyDown(document, { key: 'ArrowRight', ...modifier });
+    expect(view.getByRole('dialog', { name: 'photo.png' })).toBeTruthy();
+    await fireEvent.keyDown(document, { key: 'ArrowRight' });
+    await view.findByRole('link', { name: 'Download' });
+    expect(view.queryByRole('alert')).toBeNull();
+    await fireEvent.error(view.container.querySelector('video')!);
+    expect(view.getByRole('alert').textContent).toContain('could not play');
+    await fireEvent.keyDown(document, { key: 'ArrowRight' });
+    await view.findByRole('img', { name: 'last.png' });
+    expect(view.queryByRole('alert')).toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test');
+  });
+
+  it('ignores a late download after navigating and releases the current URL and keyboard listener on unmount', async () => {
+    const next = { ...attachment, id: 'next', filename: 'next.png' };
+    const blob = new Blob(['download']);
+    let finishDownload!: (blob: Blob) => void;
+    vi.mocked(getAttachment).mockImplementation(async (id) => id === attachment.id ? undefined : { ...next, blob });
+    vi.mocked(downloadAttachment).mockImplementation(() => new Promise((resolve) => { finishDownload = resolve; }));
+    const oncached = vi.fn();
+    const view = render(MediaPreview, { attachment, gallery: [attachment, next], onclose: vi.fn(), oncached });
+    await waitFor(() => expect(downloadAttachment).toHaveBeenCalledWith(attachment.id));
+    await fireEvent.keyDown(document, { key: 'ArrowRight' });
+    const image = await view.findByRole('img', { name: 'next.png' });
+    finishDownload(blob);
+    await waitFor(() => expect(oncached).toHaveBeenCalledTimes(1));
+    expect(state.putAttachment).toHaveBeenCalledWith({ ...attachment, cacheState: 'cached', remoteReady: true }, blob);
+    expect(image.getAttribute('src')).toBe('blob:test');
+    expect(view.getByRole('link', { name: 'Download' }).getAttribute('download')).toBe('next.png');
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    const key = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true });
+    document.dispatchEvent(key);
+    expect(key.defaultPrevented).toBe(false);
+  });
+});
+
+
+describe('account embedding search', () => {
+  const enable = () => vi.mocked(embeddingSettings).mockResolvedValue({ enabled: true, configured: true, pending: 0, running: 0, done: 3, failed: 0, total: 3, completeness: 100 });
+  const hits = [
+    { memoId: 'exact', score: .1, rankScore: .01, revision: 1 },
+    { memoId: 'photo', score: .9, rankScore: .02, revision: 2 },
+    { memoId: 'note', score: .6, rankScore: .03, revision: 3 },
+  ];
+  it('restores the account checkbox if disabling embeddings fails', async () => {
+    enable();
+    const view = await openApp();
+    await waitFor(() => expect(embeddingSettings).toHaveBeenCalled());
+    await fireEvent.click(view.getByRole('button', { name: /Settings & preferences/ }));
+    const checkbox = await view.findByRole('checkbox', { name: /Enable embeddings/ }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(await view.findByText('Ready · 100% indexed')).toBeTruthy();
+    expect(view.queryByRole('progressbar')).toBeNull();
+    vi.mocked(embeddingSettings).mockRejectedValueOnce(new Error('Server unreachable'));
+    await fireEvent.click(checkbox);
+    await view.findByText('Server unreachable');
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    expect(embeddingSettings).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps exact hits under the Ordered threshold, then switches to semantic relevance without inference', async () => {
+    enable();
+    state.memos = [
+      { ...makeMemo('exact'), body: 'cats', createdAt: '2026-01-01', bumpedAt: '2026-10-01' },
+      { ...makeMemo('photo'), body: 'photo of a pet', createdAt: '2026-02-01' },
+      { ...makeMemo('note'), body: 'a feline', createdAt: '2026-03-01' },
+    ];
+    vi.mocked(semanticSearch).mockResolvedValue({ available: true, hits });
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: 'cats' } });
+    await fireEvent.click(await view.findByRole('button', { name: 'Smart' }));
+    const region = view.getByRole('region', { name: 'Search results' });
+    const ids = () => Array.from(region.querySelectorAll('article')).map(el => el.getAttribute('data-memo-id'));
+    await waitFor(() => expect(ids()).toEqual(['exact', 'note', 'photo']));
+    await fireEvent.input(view.getByRole('slider', { name: 'Similarity threshold' }), { target: { value: '0.8' } });
+    await waitFor(() => expect(ids()).toEqual(['exact', 'photo']));
+    const calls = vi.mocked(semanticSearch).mock.calls.length;
+    await fireEvent.click(view.getByRole('button', { name: 'Relevant' }));
+    await waitFor(() => expect(ids()).toEqual(['exact', 'note', 'photo']));
+    expect(view.queryByRole('slider')).toBeNull();
+    expect(semanticSearch).toHaveBeenCalledTimes(calls);
+    await fireEvent.click(view.getByRole('button', { name: 'Vector only' }));
+    await waitFor(() => expect(ids()).toEqual(['note', 'photo', 'exact']));
+  });
+
+  it('appends search pagination after the newest-first results', async () => {
+    state.memos = Array.from({ length: 205 }, (_, i) => ({ ...makeMemo(`memo-${String(i).padStart(3, '0')}`), body: 'cats', createdAt: new Date(2026, 0, i + 1).toISOString() }));
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: 'cats' } });
+    const region = view.getByRole('region', { name: 'Search results' });
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(200));
+    const more = view.getByRole('button', { name: 'Show more results · 5 remaining' });
+    expect(more.previousElementSibling?.getAttribute('data-memo-id')).toBe('memo-005');
+    expect(region.querySelector('article')?.getAttribute('data-memo-id')).toBe('memo-204');
+    await fireEvent.click(more);
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(205));
+    expect(region.querySelector('article')?.getAttribute('data-memo-id')).toBe('memo-204');
+  });
+
+  it('omits video in both semantic modes and keeps Exact search unchanged', async () => {
+    enable();
+    state.memos = [{ ...makeMemo('clip'), body: 'cats', attachmentIds: ['video'] }, { ...makeMemo('photo'), body: 'cat photo' }];
+    state.attachments = [makeAttachment('video', 'clip', 'application/mp4')];
+    vi.mocked(semanticSearch).mockResolvedValue({ available: true, hits: [{ ...hits[1], memoId: 'clip' }, hits[1]] });
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: 'cats' } });
+    await fireEvent.click(await view.findByRole('button', { name: 'Smart' }));
+    const region = view.getByRole('region', { name: 'Search results' });
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(2));
+    await fireEvent.click(view.getByRole('checkbox', { name: 'Omit video' }));
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(1));
+    await waitFor(() => expect(semanticSearch).toHaveBeenLastCalledWith('cats', undefined, expect.any(AbortSignal), true));
+    expect(region.querySelector('article')?.getAttribute('data-memo-id')).toBe('photo');
+    await fireEvent.click(view.getByRole('button', { name: /^Exact$/ }));
+    await waitFor(() => expect(region.querySelector('article')?.getAttribute('data-memo-id')).toBe('clip'));
+    expect(view.queryByRole('checkbox', { name: 'Omit video' })).toBeNull();
+  });
+
+  it('keeps results and scroll still while index status changes, with explicit refresh available', async () => {
+    enable(); state.memos = [{ ...makeMemo('photo'), body: 'a pet' }];
+    vi.mocked(semanticSearch).mockResolvedValue({ available: true, hits: [hits[1]] });
+    const view = await openApp();
+    await fireEvent.input(view.getByRole('combobox', { name: 'Search your wall' }), { target: { value: 'cats' } });
+    await fireEvent.click(await view.findByRole('button', { name: 'Vector only' }));
+    const region = view.getByRole('region', { name: 'Search results' });
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(1));
+    const calls = vi.mocked(semanticSearch).mock.calls.length;
+    await tick();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000);
+    vi.mocked(embeddingSettings).mockResolvedValue({ enabled: true, configured: true, pending: 2, running: 1, done: 4, failed: 0, total: 7, completeness: 57.1 });
+    vi.mocked(HTMLElement.prototype.scrollTo).mockClear();
+    await fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(embeddingSettings).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(semanticSearch).toHaveBeenCalledTimes(calls);
+    expect(HTMLElement.prototype.scrollTo).not.toHaveBeenCalled();
+    expect(region.querySelectorAll('article')).toHaveLength(1);
+    expect(view.queryByText(/Still indexing/)).toBeNull();
+    await fireEvent.click(view.getByRole('button', { name: 'Refresh search results' }));
+    await waitFor(() => expect(semanticSearch).toHaveBeenCalledTimes(calls + 1));
+    clock.mockRestore();
+  });
+
+  it('shows an availability notice, preserves Smart exact hits and keeps tag search literal', async () => {
+    enable(); state.memos = [{ ...makeMemo('one'), body: 'cats', tags: ['Pets'] }];
+    vi.mocked(semanticSearch).mockResolvedValue({ available: false, hits: [] });
+    const view = await openApp();
+    const input = view.getByRole('combobox', { name: 'Search your wall' });
+    await fireEvent.input(input, { target: { value: 'cats' } });
+    await fireEvent.click(await view.findByRole('button', { name: 'Smart' }));
+    await view.findByText('Semantic search is unavailable. Exact matches remain available in Smart.');
+    const region = view.getByRole('region', { name: 'Search results' });
+    expect(region.querySelectorAll('article')).toHaveLength(1);
+    await fireEvent.click(view.getByRole('button', { name: 'Vector only' }));
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(0));
+    await fireEvent.input(input, { target: { value: '#pets' } });
+    await waitFor(() => expect(region.querySelectorAll('article')).toHaveLength(1));
+    expect((view.getByRole('button', { name: 'Smart' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { nativeServerOrigin } from './serverOrigin';
 import type { Attachment, LinkPreview, PendingOperation, Profile, SyncRequest, SyncResponse } from './types';
 import { applyServerChanges, attachmentSource, cacheNativeStream, getCursor, pendingOperations, putAttachment, rejectOperation } from './repository';
+import type { EmbeddingSettings, SemanticResponse } from './semanticSearch';
 import { clearNativeToken, isNative, nativeToken, startNativeLogin } from './nativeAuth';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -85,6 +86,20 @@ async function request(path: string, init: RequestInit = {}, retried = false) {
 
 export async function me(): Promise<Profile> {
   return request('/api/v1/auth/me').then((response) => response.json());
+}
+
+export async function embeddingSettings(enabled?: boolean): Promise<EmbeddingSettings> {
+  return request('/api/v1/search/embeddings', enabled === undefined ? {} : {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }).then(response => response.json());
+}
+
+export async function semanticSearch(query: string, spaceId: string | undefined, signal: AbortSignal, omitVideo = false): Promise<SemanticResponse> {
+  return request('/api/v1/search/semantic', {
+    method: 'POST', signal, headers: { 'content-type': 'application/json' },
+    // Return candidates once; changing ordering/threshold filters locally without inference.
+    body: JSON.stringify({ query, spaceId, threshold: 0, omitVideo }),
+  }).then(response => response.json());
 }
 
 export async function login() {

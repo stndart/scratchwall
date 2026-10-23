@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod db;
+mod embeddings;
 mod error;
 mod ingest;
 mod integrations;
@@ -227,8 +228,10 @@ fn allows_same_origin_frame(path: &str) -> bool {
 
 async fn security_headers(request: Request<Body>, next: middleware::Next) -> Response {
     let path = request.uri().path().to_string();
-    let sensitive =
-        path.starts_with("/api/") || path.starts_with("/auth/") || path.starts_with("/telegram/");
+    let sensitive = path.starts_with("/api/")
+        || path.starts_with("/auth/")
+        || path.starts_with("/telegram/")
+        || path.starts_with("/internal/");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -333,6 +336,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/me", get(auth::me))
         .route("/auth/logout", post(auth::logout))
         .route("/sync", post(sync::sync))
+        .route(
+            "/search/embeddings",
+            get(embeddings::settings).patch(embeddings::update_settings),
+        )
+        .route("/search/semantic", post(embeddings::search))
         .route("/changes", get(changes_ws))
         .route("/uploads", post(uploads::create))
         .route("/uploads/{id}", patch(uploads::append).get(uploads::status))
@@ -404,6 +412,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/downloads/", get(downloads_page))
         .route("/downloads/{name}", get(download_artifact))
         .merge(agent_routes)
+        .nest(
+            "/internal/embeddings",
+            embeddings::worker_routes().route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                embeddings::require_worker,
+            )),
+        )
         .merge(ingest_routes)
         .merge(ingest_bind_routes)
         .nest("/api/v1", protected)
@@ -416,6 +431,7 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     tracing::info!(address = %config.listen_addr, "Scratchwall listening");
+    tokio::spawn(embeddings::reconcile(state.clone()));
     tokio::spawn(thumbnails::backfill_missing_video_posters(state));
     axum::serve(listener, app).await?;
     Ok(())
@@ -556,6 +572,7 @@ mod tests {
             session_key: [1; 32],
             max_attachment_bytes: 2_147_483_648,
             ingest_token_hash: None,
+            embeddings: crate::embeddings::EmbeddingConfig::default(),
         });
         let (changes, _) = tokio::sync::broadcast::channel(8);
         let state = AppState {
