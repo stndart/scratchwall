@@ -23,13 +23,16 @@
     : !online && !available && attachment.remoteReady ? 'Connect to download'
     : attachmentStatusLabel(attachment.cacheState, attachment.remoteReady);
   $: action = active ? label : failed ? 'Retry download' : available ? 'Open' : 'Download';
+  $: showVisualStatus = active || failed || !available || !attachment.remoteReady;
 </script>
 
-{#snippet status()}
+{#snippet status(showLabel = true)}
   <span class="attachment-status" class:available={!download && available && attachment.remoteReady} class:failed title={download?.phase === 'error' ? download.error : label}>
     <span class="status-size">{#if download?.phase === 'downloading'}{formatBytes(download.received)} / {formatBytes(download.total)}{:else}{formatBytes(attachment.size)}{/if}</span>
-    <span class="status-separator" aria-hidden="true">·</span>
-    <span class="status-label">{#if download?.phase === 'downloading'}{percent}%{:else}{#if !download && available && attachment.remoteReady}<span aria-hidden="true">✓ </span>{/if}{label}{/if}</span>
+    {#if showLabel}
+      <span class="status-separator" aria-hidden="true">·</span>
+      <span class="status-label">{#if download?.phase === 'downloading'}{percent}%{:else}{#if !download && available && attachment.remoteReady}<span aria-hidden="true">✓ </span>{/if}{label}{/if}</span>
+    {/if}
   </span>
   {#if active && download}
     <progress
@@ -59,9 +62,9 @@
       <span class="file-preview">
         <img src={attachment.thumbnail} alt="" loading="lazy" draggable="false" />
         {#if isVideoMime(attachment.mimeType)}<span class="video-play" aria-hidden="true"></span>{/if}
-        <span class="media-status">
+        <span class="media-status" class:expanded={showVisualStatus}>
           <span class="media-file" title={attachment.filename}>{attachment.filename}</span>
-          {@render status()}
+          {@render status(showVisualStatus)}
         </span>
       </span>
     {:else}
@@ -105,9 +108,11 @@
   progress:indeterminate { background: linear-gradient(90deg, #ffffff15 25%, var(--accent) 50%, #ffffff15 75%); background-size: 200% 100%; animation: loading 1.4s linear infinite; }
   progress:indeterminate::-webkit-progress-bar { background: transparent; }
   .cancel-download { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: inherit; font-size: 20px; cursor: pointer; }
-  .media-status { position: absolute; inset: auto 0 0; padding: 30px 12px 10px; background: linear-gradient(transparent, #080b12ed 30%); color: #fff; }
-  .media-file { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: #e1e5ef; }
-  .visual .attachment-status { color: #c5cbd8; }
+  .media-status { position: absolute; inset: auto 0 0; display: flex; align-items: baseline; gap: 10px; padding: 14px 10px 7px; background: linear-gradient(transparent, #080b1273); color: #fff; text-shadow: 0 1px 3px #000b; }
+  .media-status.expanded { display: block; background: linear-gradient(transparent, #080b1299); }
+  .media-file { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: #e1e5ef; }
+  .visual .attachment-status { flex-shrink: 0; margin-top: 0; color: #e1e5ef; }
+  .media-status.expanded .attachment-status { margin-top: 3px; }
   .visual .status-label { color: #c5e4b9; }
   .visual.failed .status-label { color: #ffb4c1; }
   .visual progress { accent-color: #a4c49a; }

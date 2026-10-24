@@ -855,6 +855,26 @@ describe('web workspace interactions', () => {
 });
 
 describe('web media viewer', () => {
+  it('downloads a cached PDF offline in the Firefox Android PWA without opening its broken PDF viewer', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Android 15; Mobile; rv:144.0) Gecko/144.0 Firefox/144.0');
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: ['(display-mode: standalone)', '(prefers-reduced-motion: reduce)'].includes(query), addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    state.offline = true;
+    state.memos = [{ ...makeMemo('document'), attachmentIds: ['pdf'] }];
+    const pdf = { ...makeAttachment('pdf', 'document'), filename: 'report.pdf', mimeType: 'application/pdf', thumbnail: undefined };
+    state.attachments = [pdf];
+    vi.mocked(getAttachment).mockResolvedValue({ ...pdf, blob: new Blob(['%PDF-1.4'], { type: 'application/pdf' }) });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const view = await openApp();
+    await fireEvent.click(view.getByRole('button', { name: 'Open report.pdf' }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(downloadAttachment).not.toHaveBeenCalled();
+    expect((vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob).type).toBe('application/x-binary');
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    view.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledExactlyOnceWith('blob:test');
+  });
+
   const attachment = {
     id: 'image',
     memoId: 'memo',

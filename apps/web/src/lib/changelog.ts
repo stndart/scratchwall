@@ -6,6 +6,13 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.10.24.1',
+    changes: [
+      'Lighter image overlays show cached files on one line without the Available offline label.',
+      'Work around blank PDF downloads in the Firefox Android PWA.',
+    ],
+  },
+  {
     version: '2026.10.24',
     changes: [
       'Compact file status with live download progress, bytes transferred, and cancel or retry controls.',

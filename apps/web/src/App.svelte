@@ -60,6 +60,7 @@
   } from './lib/media';
   import AttachmentCard from './lib/AttachmentCard.svelte';
   import { attachmentDownloads, cancelAttachmentDownload, ensureAttachmentAvailable, stopAttachmentDownloads } from './lib/attachmentDownloads';
+  import { createFileDownloads } from './lib/fileDownloads';
   import {
     captureAnchor,
     isNearBottom,
@@ -79,6 +80,7 @@
   import { swipeToOpen } from './lib/swipe';
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
+  const fileDownloads = createFileDownloads();
   let spaces: Space[] = [];
   let memos: Memo[] = [];
   let attachments: Attachment[] = [];
@@ -747,18 +749,6 @@
     return isVisualPreview(attachment);
   }
 
-  function downloadBlob(blob: Blob, filename: string) {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.rel = 'noopener';
-    link.download = filename || 'download';
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-  }
-
   function openAlbumImage(attachment: Attachment) {
     void openAttachment(attachment);
   }
@@ -775,7 +765,7 @@
       if (!profile) return;
       await refresh();
       if (isNative()) await openNativeAttachment(attachment.id);
-      else if (blob) downloadBlob(blob, attachment.filename);
+      else if (blob) fileDownloads.download(attachment, blob);
     } catch (value) {
       if (value instanceof UnauthorizedError) { authExpired = true; error = value.message; }
       else if (!$attachmentDownloads[attachment.id] && profile) error = value instanceof Error ? value.message : String(value);
@@ -800,7 +790,7 @@
         if (isNative()) blob = (await getAttachment(attachment.id))?.blob;
         if (!blob) throw new Error(`Could not read ${attachment.filename}`);
         await refresh();
-        downloadBlob(blob, attachment.filename);
+        fileDownloads.download(attachment, blob);
       } catch (value) {
         if (value instanceof UnauthorizedError) { authExpired = true; error = value.message; }
         else if (!$attachmentDownloads[attachment.id] && profile) error = value instanceof Error ? value.message : String(value);
@@ -868,6 +858,7 @@
     )
       return;
     await stopAttachmentDownloads();
+    fileDownloads.clear();
     await clearAttachmentCache();
     await refresh();
   }
@@ -1107,6 +1098,7 @@
     semanticHits = [];
     preferencesLoadedAt = 0;
     profile = undefined;
+    fileDownloads.clear();
     localStorage.setItem('scratchwall.loggedOut', 'true');
     settingsOpen = false;
     sidebarOpen = false;
@@ -1202,6 +1194,7 @@
           const previous = await getProfile();
           if (previous && previous.subject !== authenticated.subject) {
             await stopAttachmentDownloads();
+            fileDownloads.clear();
             await clearLocalData();
           }
           profile = authenticated;
@@ -1229,6 +1222,7 @@
         const current = await me();
         if (cachedProfile && cachedProfile.subject !== current.subject) {
           await stopAttachmentDownloads();
+          fileDownloads.clear();
           await clearLocalData();
           body = '';
           selectedFiles = [];
@@ -1278,6 +1272,7 @@
 
     return () => {
       void stopAttachmentDownloads();
+      fileDownloads.dispose();
       clearTimeout(semanticTimer);
       semanticController?.abort();
       disconnectSocket?.();
