@@ -6,6 +6,13 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.10.24',
+    changes: [
+      'Compact file status with live download progress, bytes transferred, and cancel or retry controls.',
+      'Files show Available offline only after the complete download is saved to this device.',
+    ],
+  },
+  {
     version: '2026.10.23',
     changes: [
       'Smart search',

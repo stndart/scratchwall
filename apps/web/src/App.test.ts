@@ -9,6 +9,7 @@ import { getAttachment } from './lib/repository';
 import { downloadAttachment, embeddingSettings, semanticSearch } from './lib/api';
 import { SearchIndex } from './lib/search';
 import { currentVersion } from './lib/changelog';
+import { stopAttachmentDownloads } from './lib/attachmentDownloads';
 
 const state = vi.hoisted(() => ({
   memos: [] as Memo[],
@@ -199,9 +200,10 @@ beforeEach(() => {
   URL.createObjectURL = vi.fn(() => 'blob:test');
   URL.revokeObjectURL = vi.fn();
 });
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
   cleanup();
+  await stopAttachmentDownloads();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -859,8 +861,8 @@ describe('web media viewer', () => {
     filename: 'photo.png',
     mimeType: 'image/png',
     size: 12,
-    cacheState: 'local' as const,
-    remoteReady: false,
+    cacheState: 'remote' as const,
+    remoteReady: true,
     createdAt: '2026-10-01',
   };
   it('browses across messages and unrendered older memos with keys and buttons, staying in the space', async () => {
@@ -973,6 +975,29 @@ describe('web media viewer', () => {
     );
   });
 
+  it('shows streamed progress in the viewer and supports cancelling and retrying the same file', async () => {
+    vi.mocked(getAttachment).mockResolvedValue(undefined);
+    let finishDownload!: (blob: Blob) => void;
+    vi.mocked(downloadAttachment).mockImplementation((_attachment, options) => new Promise((resolve, reject) => {
+      finishDownload = resolve;
+      options?.onProgress?.(6);
+      options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+    }));
+    const view = render(MediaPreview, { attachment, onclose: vi.fn(), oncached: vi.fn() });
+    const progress = await view.findByRole('progressbar', { name: 'Download photo.png' });
+    await waitFor(() => expect(progress.getAttribute('value')).toBe('6'));
+    expect(progress.getAttribute('max')).toBe('12');
+    expect(view.getByText('6 B / 12 B · 50%')).toBeTruthy();
+    await fireEvent.click(view.getByRole('button', { name: 'Cancel download' }));
+    expect((await view.findByRole('alert')).textContent).toContain('Download cancelled');
+    expect(state.putAttachment).not.toHaveBeenCalled();
+    await fireEvent.click(view.getByRole('button', { name: 'Retry download' }));
+    await waitFor(() => expect(downloadAttachment).toHaveBeenCalledTimes(2));
+    finishDownload(new Blob(['download']));
+    await view.findByRole('img', { name: 'photo.png' });
+    expect(state.putAttachment).toHaveBeenCalledOnce();
+  });
+
   it('can leave an unavailable file, clears playback errors, and ignores modified arrow shortcuts', async () => {
     const video = { ...attachment, id: 'clip', filename: 'clip.mp4', mimeType: 'video/mp4' };
     const photo = { ...attachment, id: 'last', filename: 'last.png' };
@@ -1002,7 +1027,7 @@ describe('web media viewer', () => {
     vi.mocked(downloadAttachment).mockImplementation(() => new Promise((resolve) => { finishDownload = resolve; }));
     const oncached = vi.fn();
     const view = render(MediaPreview, { attachment, gallery: [attachment, next], onclose: vi.fn(), oncached });
-    await waitFor(() => expect(downloadAttachment).toHaveBeenCalledWith(attachment.id));
+    await waitFor(() => expect(downloadAttachment).toHaveBeenCalledWith(attachment, expect.objectContaining({ signal: expect.any(AbortSignal) })));
     await fireEvent.keyDown(document, { key: 'ArrowRight' });
     const image = await view.findByRole('img', { name: 'next.png' });
     finishDownload(blob);

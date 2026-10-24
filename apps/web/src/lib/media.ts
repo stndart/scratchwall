@@ -60,11 +60,10 @@ export function isVisualPreview(attachment: { mimeType: string; thumbnail?: stri
 }
 
 export function isAttachmentCached(cacheState: 'local' | 'cached' | 'remote' | 'error'): boolean {
-  return cacheState === 'local' || cacheState === 'cached';
+  return cacheState === 'local' || cacheState === 'cached' || cacheState === 'error';
 }
 
 export function attachmentStatusLabel(cacheState: 'local' | 'cached' | 'remote' | 'error', remoteReady: boolean): string {
-  if (!remoteReady && cacheState === 'local') return 'Uploading…';
-  if (cacheState === 'error') return 'Upload failed';
-  return cacheState;
+  if (!remoteReady) return cacheState === 'error' ? 'Upload failed · saved on this device' : cacheState === 'local' ? 'Uploading…' : 'Waiting for upload';
+  return isAttachmentCached(cacheState) ? 'Available offline' : 'Download';
 }

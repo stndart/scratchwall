@@ -25,7 +25,6 @@
   import {
     clearLocalData,
     clearAttachmentCache,
-    attachmentSource,
     openNativeAttachment,
     deleteMemoLocal,
     deleteSpaceLocal,
@@ -44,8 +43,6 @@
     semanticSearch,
     cancelRequests,
     connectChanges,
-    downloadAttachment,
-    downloadNativeAttachment,
     fetchLinkPreview,
     login,
     logout,
@@ -55,16 +52,14 @@
     uploadPendingAttachments,
   } from './lib/api';
   import {
-    attachmentStatusLabel,
     createThumbnail,
-    fileExtension,
-    formatBytes,
-    isAttachmentCached,
     isPreviewableMedia,
     isVideoMime,
     isVisualPreview,
     spaceMedia,
   } from './lib/media';
+  import AttachmentCard from './lib/AttachmentCard.svelte';
+  import { attachmentDownloads, cancelAttachmentDownload, ensureAttachmentAvailable, stopAttachmentDownloads } from './lib/attachmentDownloads';
   import {
     captureAnchor,
     isNearBottom,
@@ -173,6 +168,7 @@
   let previewTick = 0;
   const previewCache = new Map<string, LinkPreview | null>();
   const previewQueued = new Set<string>();
+  const openingAttachments = new Set<string>();
   let previewQueue: string[] = [];
   let previewBusy = false;
 
@@ -768,37 +764,24 @@
   }
 
   async function openAttachment(attachment: Attachment) {
-    if (isNative()) {
-      try {
-        if (!(await attachmentSource(attachment.id)))
-          await downloadNativeAttachment(attachment);
-        await openNativeAttachment(attachment.id);
-        await refresh();
-      } catch (value) {
-        error = value instanceof Error ? value.message : String(value);
-      }
-      return;
-    }
-    if (isPreviewableMedia(attachment)) {
+    if (!isNative() && isPreviewableMedia(attachment)) {
       previewAttachment = attachment;
       return;
     }
-    const cached = await getAttachment(attachment.id);
-    let blob = cached?.blob;
-    if (!blob) {
-      try {
-        blob = await downloadAttachment(attachment.id);
-        await putAttachment(
-          { ...attachment, cacheState: 'cached', remoteReady: true },
-          blob,
-        );
-        await refresh();
-      } catch (value) {
-        error = value instanceof Error ? value.message : String(value);
-        return;
-      }
+    if (openingAttachments.has(attachment.id)) return;
+    openingAttachments.add(attachment.id);
+    try {
+      const blob = await ensureAttachmentAvailable(attachment);
+      if (!profile) return;
+      await refresh();
+      if (isNative()) await openNativeAttachment(attachment.id);
+      else if (blob) downloadBlob(blob, attachment.filename);
+    } catch (value) {
+      if (value instanceof UnauthorizedError) { authExpired = true; error = value.message; }
+      else if (!$attachmentDownloads[attachment.id] && profile) error = value instanceof Error ? value.message : String(value);
+    } finally {
+      openingAttachments.delete(attachment.id);
     }
-    downloadBlob(blob, attachment.filename);
   }
 
   async function downloadFiles(ids: Iterable<string>) {
@@ -812,21 +795,15 @@
     }
     for (const attachment of files) {
       try {
-        let blob = (await getAttachment(attachment.id))?.blob;
-        if (!blob && isNative()) {
-          await downloadNativeAttachment(attachment);
-          blob = (await getAttachment(attachment.id))?.blob;
-        } else if (!blob) {
-          blob = await downloadAttachment(attachment.id);
-          await putAttachment(
-            { ...attachment, cacheState: 'cached', remoteReady: true },
-            blob,
-          );
-        }
+        let blob = await ensureAttachmentAvailable(attachment);
+        if (!profile) return;
+        if (isNative()) blob = (await getAttachment(attachment.id))?.blob;
         if (!blob) throw new Error(`Could not read ${attachment.filename}`);
+        await refresh();
         downloadBlob(blob, attachment.filename);
       } catch (value) {
-        error = value instanceof Error ? value.message : String(value);
+        if (value instanceof UnauthorizedError) { authExpired = true; error = value.message; }
+        else if (!$attachmentDownloads[attachment.id] && profile) error = value instanceof Error ? value.message : String(value);
         return;
       }
     }
@@ -890,6 +867,7 @@
       )
     )
       return;
+    await stopAttachmentDownloads();
     await clearAttachmentCache();
     await refresh();
   }
@@ -1145,6 +1123,7 @@
     drafts = new Map();
     disconnectSocket?.();
     cancelRequests();
+    await stopAttachmentDownloads();
     await syncFlight;
     try {
       await logout();
@@ -1221,8 +1200,10 @@
         async (authenticated) => {
           error = '';
           const previous = await getProfile();
-          if (previous && previous.subject !== authenticated.subject)
+          if (previous && previous.subject !== authenticated.subject) {
+            await stopAttachmentDownloads();
             await clearLocalData();
+          }
           profile = authenticated;
           checkingSession = false;
           await setProfile(authenticated);
@@ -1247,6 +1228,7 @@
           throw new Error('Sign in to continue');
         const current = await me();
         if (cachedProfile && cachedProfile.subject !== current.subject) {
+          await stopAttachmentDownloads();
           await clearLocalData();
           body = '';
           selectedFiles = [];
@@ -1295,6 +1277,7 @@
     })();
 
     return () => {
+      void stopAttachmentDownloads();
       clearTimeout(semanticTimer);
       semanticController?.abort();
       disconnectSocket?.();
@@ -1733,40 +1716,14 @@
                     class="album"
                     class:album-single={images.length === 1}
                   >
-                    {#each images as attachment (attachment.id)}<button
-                        class="image-attachment"
-                        class:video={isVideoMime(attachment.mimeType)}
-                        aria-label={`Open ${attachment.filename}`}
-                        onclick={() => openAlbumImage(attachment)}
-                        ><img
-                          src={attachment.thumbnail}
-                          alt={attachment.filename}
-                          loading="lazy"
-                          draggable="false"
-                        />{#if isVideoMime(attachment.mimeType)}<span
-                            class="video-play"
-                            aria-hidden="true"
-
-                          ></span>{/if}{#if !isAttachmentCached(attachment.cacheState)}<span
-                            class="download-badge"
-                            ><Icon name="download" size={15} /></span
-                          >{/if}</button
-                      >{/each}
+                    {#each images as attachment (attachment.id)}
+                      <AttachmentCard {attachment} download={$attachmentDownloads[attachment.id]} {online} visual onopen={() => openAlbumImage(attachment)} oncancel={() => cancelAttachmentDownload(attachment.id)} />
+                    {/each}
                   </div>{/if}
                 {#if files.length}<div class="attachments">
-                    {#each files as attachment (attachment.id)}<button
-                        class="attachment"
-                        onclick={() => openAttachment(attachment)}
-                        ><span class="file-badge"
-                          >{fileExtension(attachment.filename)}</span
-                        ><span class="file-meta"
-                          ><strong>{attachment.filename}</strong><small
-                            >{attachment.size
-                              ? `${formatBytes(attachment.size)} · ${attachmentStatusLabel(attachment.cacheState, attachment.remoteReady)}`
-                              : 'Still syncing to this device'}</small
-                          ></span
-                        ><Icon name="download" size={18} /></button
-                      >{/each}
+                    {#each files as attachment (attachment.id)}
+                      <AttachmentCard {attachment} download={$attachmentDownloads[attachment.id]} {online} onopen={() => void openAttachment(attachment)} oncancel={() => cancelAttachmentDownload(attachment.id)} />
+                    {/each}
                   </div>{/if}
               {/if}
               {#if memo.tags.length}<div class="tags">

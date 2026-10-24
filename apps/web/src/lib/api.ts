@@ -3,6 +3,7 @@ import type { Attachment, LinkPreview, PendingOperation, Profile, SyncRequest, S
 import { applyServerChanges, attachmentSource, cacheNativeStream, getCursor, pendingOperations, putAttachment, rejectOperation } from './repository';
 import type { EmbeddingSettings, SemanticResponse } from './semanticSearch';
 import { clearNativeToken, isNative, nativeToken, startNativeLogin } from './nativeAuth';
+import { consumeDownload, type DownloadOptions } from './downloadStream';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 let requests = new AbortController();
@@ -70,7 +71,8 @@ async function request(path: string, init: RequestInit = {}, retried = false) {
   const headers = new Headers(init.headers);
   const token = nativeToken();
   if (token) headers.set('authorization', `Bearer ${token}`);
-  const response = await fetch(`${apiOrigin()}${path}`, { credentials: 'include', signal: requests.signal, ...init, headers });
+  const signal = init.signal ? AbortSignal.any([requests.signal, init.signal]) : requests.signal;
+  const response = await fetch(`${apiOrigin()}${path}`, { credentials: 'include', ...init, signal, headers });
   if (response.status === 401) {
     if (!retried && await silentReauth()) return request(path, init, true);
     throw new UnauthorizedError('Sign in required');
@@ -181,14 +183,29 @@ export function fileUrl(id: string) {
   return `${origin}/api/v1/files/${encodeURIComponent(id)}`;
 }
 
-export async function downloadAttachment(id: string): Promise<Blob> {
-  return request(`/api/v1/files/${encodeURIComponent(id)}`).then((response) => response.blob());
+export async function downloadAttachment(attachment: Attachment, options: DownloadOptions = {}): Promise<Blob> {
+  const response = await request(`/api/v1/files/${encodeURIComponent(attachment.id)}`, { signal: options.signal });
+  if (!response.body) throw new Error('Download returned no file');
+  // Let the browser spool the Blob instead of holding a JS array of every chunk.
+  const buffer = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = buffer.writable.getWriter();
+  const blob = new Response(buffer.readable, { headers: { 'content-type': attachment.mimeType } }).blob();
+  // Attach rejection handling immediately; a cancelled response may fail mid-read.
+  void blob.catch(() => {});
+  try {
+    await consumeDownload(response.body, attachment.size, (chunk) => writer.write(chunk), options);
+    await writer.close();
+    return await blob;
+  } catch (error) {
+    await writer.abort(error).catch(() => {});
+    throw error;
+  } finally { writer.releaseLock(); }
 }
 
-export async function downloadNativeAttachment(attachment: Attachment) {
-  const response = await request(`/api/v1/files/${encodeURIComponent(attachment.id)}`);
+export async function downloadNativeAttachment(attachment: Attachment, options: DownloadOptions = {}) {
+  const response = await request(`/api/v1/files/${encodeURIComponent(attachment.id)}`, { signal: options.signal });
   if (!response.body) throw new Error('Download returned no file');
-  await cacheNativeStream(attachment, response.body);
+  await cacheNativeStream(attachment, response.body, options);
 }
 
 export function connectChanges(onChange: () => void): () => void {

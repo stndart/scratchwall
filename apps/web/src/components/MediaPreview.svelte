@@ -3,8 +3,8 @@
   import Dialog from './Dialog.svelte';
   import Icon from './Icon.svelte';
   import type { Attachment } from '../lib/types';
-  import { getAttachment, putAttachment } from '../lib/repository';
-  import { downloadAttachment } from '../lib/api';
+  import { getAttachment } from '../lib/repository';
+  import { attachmentDownloads, cancelAttachmentDownload, ensureAttachmentAvailable } from '../lib/attachmentDownloads';
   import { formatBytes, isVideoMime } from '../lib/media';
   import { isTypingTarget } from '../lib/clipboard';
 
@@ -20,6 +20,8 @@
   let loadVersion = 0;
   $: galleryIndex = gallery.findIndex((item) => item.id === attachment.id);
   $: hasGallery = galleryIndex >= 0 && gallery.length > 1;
+  $: download = $attachmentDownloads[attachment.id];
+  $: percent = download?.total ? Math.min(100, Math.floor(download.received / download.total * 100)) : 0;
   $: if (mounted) void loadAttachment(attachment);
 
   function navigate(direction: number) {
@@ -57,18 +59,15 @@
     try {
       let blob = (await getAttachment(current.id))?.blob;
       if (!blob) {
-        blob = await downloadAttachment(current.id);
-        await putAttachment(
-          { ...current, cacheState: 'cached', remoteReady: true },
-          blob,
-        );
+        blob = await ensureAttachmentAvailable(current);
+        if (!blob) throw new Error('Could not read this file');
         oncached();
       }
       if (version === loadVersion)
         url = URL.createObjectURL(new Blob([blob], { type: current.mimeType }));
     } catch (value) {
       if (version === loadVersion)
-        error = value instanceof Error
+        error = $attachmentDownloads[current.id]?.phase === 'cancelled' ? 'Download cancelled.' : value instanceof Error
           ? value.message
           : 'Could not open this file. Connect to download it.';
     } finally {
@@ -90,12 +89,22 @@
 <Dialog title={attachment.filename} wide media {onclose}>
   <div class="media-preview" aria-busy={loading}>
     {#if loading}<div class="media-loading">
-        <span class="spinner"></span>
-        <p>Opening your file…</p>
+        {#if download}
+          <div class="preview-transfer">
+            <p>{download.phase === 'connecting' ? 'Connecting…' : download.phase === 'saving' ? 'Saving to device…' : 'Downloading'}</p>
+            <span class="preview-transfer-details">{`${formatBytes(download.received)} / ${formatBytes(download.total)}${download.phase === 'downloading' ? ` · ${percent}%` : ''}`}</span>
+            <progress max={download.total || 1} value={download.phase === 'connecting' ? undefined : download.received} aria-label={`Download ${attachment.filename}`}></progress>
+            {#if download.phase !== 'saving'}<button class="secondary" type="button" onclick={() => cancelAttachmentDownload(attachment.id)}>Cancel download</button>{/if}
+          </div>
+        {:else}
+          <span class="spinner"></span>
+          <p>Opening your file…</p>
+        {/if}
       </div>
     {:else if error}<div class="media-loading" role="alert">
         <Icon name="warning" size={28} />
         <p>{error}</p>
+        <button class="secondary" type="button" onclick={() => void loadAttachment(attachment)}>Retry download</button>
       </div>
     {:else if isVideoMime(attachment.mimeType)}
       <!-- svelte-ignore a11y_media_has_caption (Original user uploads may not include captions.) -->
@@ -121,7 +130,7 @@
             disabled={galleryIndex === gallery.length - 1}
             onclick={() => navigate(1)}><Icon name="chevron" /></button>
         </div>{/if}
-      <span>{#if playbackError}<span role="alert">{playbackError}</span>{:else}{formatBytes(attachment.size)}{/if}</span>
+      <span>{#if playbackError}<span role="alert">{playbackError}</span>{:else if !loading || !download}{formatBytes(attachment.size)}{/if}</span>
     </div>{#if url}<a
         class="secondary"
         href={url}
@@ -130,3 +139,13 @@
       >{/if}
   </div>
 </Dialog>
+
+<style>
+  .preview-transfer { display: grid; justify-items: center; gap: 12px; width: min(320px, 100%); }
+  .preview-transfer p { margin: 0; }
+  .preview-transfer-details { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  progress { width: 100%; height: 4px; border: 0; border-radius: 999px; overflow: hidden; accent-color: var(--accent); }
+  progress::-webkit-progress-bar { background: var(--line); }
+  progress::-webkit-progress-value { background: var(--accent); }
+  progress::-moz-progress-bar { background: var(--accent); }
+</style>

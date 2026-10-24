@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Attachment, Memo, PendingOperation, Profile, ServerChange, Space } from './types';
 import { isNative } from './nativeAuth';
 import type Database from '@tauri-apps/plugin-sql';
+import { consumeDownload, type DownloadOptions } from './downloadStream';
 
 interface ScratchwallDb extends DBSchema {
   spaces: { key: string; value: Space; indexes: { position: number } };
@@ -43,31 +44,33 @@ async function writeNativeBlob(id: string, blob: Blob, filename: string): Promis
   return path;
 }
 
-export async function cacheNativeStream(attachment: Attachment, stream: ReadableStream<Uint8Array>) {
+export async function cacheNativeStream(attachment: Attachment, stream: ReadableStream<Uint8Array>, options: DownloadOptions = {}) {
   const { BaseDirectory, mkdir, open, remove } = await import('@tauri-apps/plugin-fs');
   const filename = safeFilename(attachment.filename);
   const directory = `${NATIVE_ATTACHMENT_DIR}/${attachment.id}`;
   await mkdir(directory, { baseDir: BaseDirectory.AppData, recursive: true });
   const path = `${directory}/${filename}`;
   const file = await open(path, { baseDir: BaseDirectory.AppData, create: true, truncate: true, write: true });
-  const reader = stream.getReader();
-  let size = 0;
+  let closed = false;
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > attachment.size) throw new Error('Downloaded file exceeds its declared size');
-      await file.write(value);
-    }
-    if (size !== attachment.size) throw new Error('Downloaded file is incomplete');
-  } catch (error) {
+    await consumeDownload(stream, attachment.size, async (chunk) => {
+      let offset = 0;
+      while (offset < chunk.byteLength) {
+        const written = await file.write(chunk.subarray(offset));
+        if (written <= 0) throw new Error('Could not save downloaded file');
+        offset += written;
+      }
+    }, options);
+    options.signal?.throwIfAborted();
+    options.onSaving?.();
     await file.close();
-    await remove(path, { baseDir: BaseDirectory.AppData });
+    closed = true;
+    await (await nativeDatabase()).execute('UPDATE attachments SET value_json=$1,blob_path=$2 WHERE id=$3', [JSON.stringify({ ...attachment, remoteReady: true, cacheState: 'cached' }), path, attachment.id]);
+  } catch (error) {
+    if (!closed) await file.close().catch(() => {});
+    await remove(path, { baseDir: BaseDirectory.AppData }).catch(() => {});
     throw error;
-  } finally { reader.releaseLock(); }
-  await file.close();
-  await (await nativeDatabase()).execute('UPDATE attachments SET value_json=$1,blob_path=$2 WHERE id=$3', [JSON.stringify({ ...attachment, remoteReady: true, cacheState: 'cached' }), path, attachment.id]);
+  }
 }
 
 export async function openNativeAttachment(id: string) {

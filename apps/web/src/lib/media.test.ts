@@ -23,16 +23,17 @@ describe('isAttachmentCached', () => {
     expect(isAttachmentCached('local')).toBe(true);
     expect(isAttachmentCached('cached')).toBe(true);
     expect(isAttachmentCached('remote')).toBe(false);
-    expect(isAttachmentCached('error')).toBe(false);
+    expect(isAttachmentCached('error')).toBe(true);
   });
 });
 
 describe('attachmentStatusLabel', () => {
   it('tells the user when a local file is still uploading', () => {
     expect(attachmentStatusLabel('local', false)).toBe('Uploading…');
-    expect(attachmentStatusLabel('error', false)).toBe('Upload failed');
-    expect(attachmentStatusLabel('cached', true)).toBe('cached');
-    expect(attachmentStatusLabel('remote', true)).toBe('remote');
+    expect(attachmentStatusLabel('error', false)).toBe('Upload failed · saved on this device');
+    expect(attachmentStatusLabel('cached', true)).toBe('Available offline');
+    expect(attachmentStatusLabel('remote', true)).toBe('Download');
+    expect(attachmentStatusLabel('remote', false)).toBe('Waiting for upload');
   });
 });
 
