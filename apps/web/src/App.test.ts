@@ -10,6 +10,7 @@ import { downloadAttachment, embeddingSettings, semanticSearch } from './lib/api
 import { SearchIndex } from './lib/search';
 import { currentVersion } from './lib/changelog';
 import { stopAttachmentDownloads } from './lib/attachmentDownloads';
+import { createSpacePdf } from './lib/spacePdf';
 
 const state = vi.hoisted(() => ({
   memos: [] as Memo[],
@@ -55,6 +56,7 @@ vi.mock('./lib/api', () => ({
   connectChanges: () => () => {},
   downloadAttachment: vi.fn(),
   downloadNativeAttachment: vi.fn(),
+  fileUrl: (id: string) => `/api/v1/files/${id}`,
   fetchLinkPreview: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
@@ -65,6 +67,7 @@ vi.mock('./lib/api', () => ({
   semanticSearch: vi.fn(),
   UnauthorizedError: class extends Error {},
 }));
+vi.mock('./lib/spacePdf', () => ({ createSpacePdf: vi.fn() }));
 vi.mock('./lib/nativeAuth', () => ({
   isNative: () => false,
   initializeNativeAuth: async () => () => {},
@@ -208,6 +211,32 @@ afterEach(async () => {
 });
 
 describe('web workspace interactions', () => {
+  it('downloads a fresh PDF each time from the current space heading', async () => {
+    const memo = makeMemo('saved');
+    state.memos = [memo, { ...makeMemo('other'), spaceId: 'ideas' }];
+    const first = new Blob(['first'], { type: 'application/pdf' });
+    const second = new Blob(['second'], { type: 'application/pdf' });
+    vi.mocked(createSpacePdf).mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download);
+    });
+
+    const view = await openApp();
+    const button = view.getByRole('button', { name: 'Download space as PDF' });
+    await fireEvent.click(button);
+    await waitFor(() => expect(downloads).toEqual(['Inbox.pdf']));
+    expect(createSpacePdf).toHaveBeenCalledWith(expect.objectContaining({
+      space: expect.objectContaining({ id: 'inbox' }),
+      memos: state.memos,
+    }));
+    await fireEvent.click(view.getByRole('button', { name: 'Download space as PDF' }));
+    await waitFor(() => expect(downloads).toEqual(['Inbox.pdf', 'Inbox.pdf']));
+    expect(URL.createObjectURL).toHaveBeenNthCalledWith(1, first);
+    expect(URL.createObjectURL).toHaveBeenNthCalledWith(2, second);
+    expect(URL.revokeObjectURL).toHaveBeenCalledOnce();
+  });
+
   it('saves the selected task, preserves memo metadata and retains its state after reopening offline', async () => {
     const memo = { ...makeMemo('checklist'), body: '- [ ] Same\n```text\n- [ ] Same\n```\n- [ ] Same', tags: ['Keep'], attachmentIds: ['file'], bumpedAt: '2026-10-02' };
     state.memos = [memo];

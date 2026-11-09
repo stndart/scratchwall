@@ -6,6 +6,10 @@ export interface Release {
 // Newest first. Add a distinct version and short notes for every deployment.
 export const releases: Release[] = [
   {
+    version: '2026.11.09',
+    changes: ['Download a space as a PDF with its memos, tags, and images.'],
+  },
+  {
     version: '2026.10.24.1',
     changes: [
       'Lighter image overlays show cached files on one line without the Available offline label.',

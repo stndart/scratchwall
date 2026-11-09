@@ -9,7 +9,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       injectRegister: false,
-      includeAssets: ['icon.svg', 'apple-touch-icon.png'],
+      includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pdf-fonts/*'],
       manifest: {
         name: 'Scratchwall',
         short_name: 'Scratchwall',

@@ -44,6 +44,8 @@
     cancelRequests,
     connectChanges,
     fetchLinkPreview,
+    downloadAttachment,
+    fileUrl,
     login,
     logout,
     me,
@@ -81,6 +83,7 @@
 
   const MAX_ATTACHMENT_BYTES = 2_147_483_648;
   const fileDownloads = createFileDownloads();
+  const pdfDownloads = createFileDownloads();
   let spaces: Space[] = [];
   let memos: Memo[] = [];
   let attachments: Attachment[] = [];
@@ -149,6 +152,7 @@
   let spaceForm: { space?: Space } | undefined;
   let spaceName = '';
   let spaceSaving = false;
+  let pdfExport: AbortController | undefined;
   let reorderingSpaces = false;
   let appInstalled = isNative() || isStandalone();
   let installHelpOpen = false;
@@ -402,6 +406,41 @@
   function renameSpace(space: Space) {
     spaceName = space.name;
     spaceForm = { space };
+  }
+
+  async function downloadSpacePdf(space: Space) {
+    if (pdfExport) return;
+    const snapshot = { space, memos, attachments };
+    const controller = new AbortController();
+    const { signal } = controller;
+    pdfExport = controller;
+    error = '';
+    try {
+      const { createSpacePdf } = await import('./lib/spacePdf');
+      signal.throwIfAborted();
+      const pdf = await createSpacePdf({
+        ...snapshot, signal,
+        fileLink: (attachment) => attachment.remoteReady ? new URL(fileUrl(attachment.id), location.href).href : undefined,
+        async loadImage(attachment) {
+          const local = (await getAttachment(attachment.id))?.blob;
+          signal.throwIfAborted();
+          if (local) return local;
+          if (!online) throw new Error(`Connect to the internet to include “${attachment.filename}” in the PDF.`);
+          if (!attachment.remoteReady) throw new Error(`“${attachment.filename}” is still syncing. Try again after sync finishes.`);
+          return downloadAttachment(attachment, { signal });
+        },
+      });
+      signal.throwIfAborted();
+      const filename = `${space.name.replace(/[\\/:*?"<>|]/g, '_')}.pdf`;
+      pdfDownloads.clear();
+      pdfDownloads.download({ id: space.id, filename, mimeType: 'application/pdf' }, pdf);
+    } catch (value) {
+      if (signal.aborted) return;
+      if (value instanceof UnauthorizedError) authExpired = true;
+      error = value instanceof Error ? value.message : 'Could not create the space PDF.';
+    } finally {
+      pdfExport = undefined;
+    }
   }
 
   async function saveSpace() {
@@ -1099,6 +1138,8 @@
     preferencesLoadedAt = 0;
     profile = undefined;
     fileDownloads.clear();
+    pdfExport?.abort();
+    pdfDownloads.clear();
     localStorage.setItem('scratchwall.loggedOut', 'true');
     settingsOpen = false;
     sidebarOpen = false;
@@ -1273,6 +1314,8 @@
     return () => {
       void stopAttachmentDownloads();
       fileDownloads.dispose();
+      pdfExport?.abort();
+      pdfDownloads.dispose();
       clearTimeout(semanticTimer);
       semanticController?.abort();
       disconnectSocket?.();
@@ -1516,7 +1559,15 @@
             ><Icon name={selecting ? 'close' : 'select'} size={17} /><span
               >{selecting ? 'Done' : 'Select'}</span
             ></button
-          >{#if activeSpace && !activeSpace.isInbox && !query}<button
+          >{#if activeSpace && !query}<button
+              class="icon-button"
+              title={pdfExport ? 'Creating space PDF' : 'Download space as PDF'}
+              aria-label={pdfExport ? 'Creating space PDF' : 'Download space as PDF'}
+              aria-busy={!!pdfExport}
+              disabled={!!pdfExport}
+              onclick={() => activeSpace && downloadSpacePdf(activeSpace)}
+              >{#if pdfExport}<span class="tiny-spinner"></span>{:else}<Icon name="download" size={18} />{/if}</button
+            >{/if}{#if activeSpace && !activeSpace.isInbox && !query}<button
               class="icon-button"
               title="Rename space"
               aria-label="Rename space"
